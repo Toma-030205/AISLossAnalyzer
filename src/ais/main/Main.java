@@ -1,9 +1,15 @@
 package ais.main;
 
+import ais.logic.VesselOrganizer;
 import ais.model.AisMessage;
+import ais.model.Vessel;
 import ais.parser.FileLoader;
 
 import java.util.List;
+import java.util.Map;
+import ais.logic.GapAnalyzer;
+import ais.stats.VesselStatistics;
+import ais.stats.VesselStatisticsResult;
 
 public class Main {
 
@@ -19,26 +25,51 @@ public class Main {
                 loader.loadFile(filePath);
 
         System.out.println(
-                "デコード成功件数: "
+                "総メッセージ数: "
                         + messages.size()
         );
 
-        for (AisMessage msg : messages) {
+        VesselOrganizer organizer =
+                new VesselOrganizer();
 
-            // Type1,2,3だけ表示
-            if (msg.messageType == 1
-                    || msg.messageType == 2
-                    || msg.messageType == 3) {
+        Map<Integer, Vessel> vesselMap =
+                organizer.organizeByMmsi(messages);
 
-                System.out.println(
-                        "TIME=" + msg.timestamp
-                                + " MMSI=" + msg.mmsi
-                                + " TYPE=" + msg.messageType
-                                + " LAT=" + msg.lat
-                                + " LON=" + msg.lon
-                                + " SOG=" + msg.sog
-                );
-            }
+        System.out.println(
+                "船舶数: "
+                        + vesselMap.size()
+        );
+
+        // 表示
+        /*
+        for (Vessel vessel : vesselMap.values()) {
+
+            System.out.println(
+                    "MMSI="
+                            + vessel.getMmsi()
+                            + " MESSAGE_COUNT="
+                            + vessel.getMessages().size()
+            );
+        }
+        */
+
+        GapAnalyzer analyzer =
+            new GapAnalyzer();
+
+            for (Vessel vessel : vesselMap.values()) {
+
+            analyzer.analyze(vessel);
+        }
+
+        VesselStatistics statistics =
+            new VesselStatistics();
+
+        for (Vessel vessel : vesselMap.values()) {
+
+            VesselStatisticsResult result =
+                    statistics.analyze(vessel);
+
+            System.out.println(result);
         }
     }
 }

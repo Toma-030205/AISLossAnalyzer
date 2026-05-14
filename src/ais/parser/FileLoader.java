@@ -6,8 +6,13 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public class FileLoader {
+
+    private static final DateTimeFormatter formatter =
+        DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
 
     public List<AisMessage> loadFile(String filePath) {
 
@@ -28,8 +33,8 @@ public class FileLoader {
                     continue;
                 }
 
-                String timestamp = parts[0];
-                String nmea = parts[1];
+                String timestamp = parts[0].trim();
+                String nmea = parts[1].trim();
 
                 AisMessage msg =
                         AisDecoder.decode(nmea);
@@ -38,7 +43,11 @@ public class FileLoader {
                     continue;
                 }
 
-                msg.timestamp = timestamp;
+                msg.timestamp =
+                    LocalDateTime.parse(
+                    timestamp,
+                    formatter
+                );
 
                 messages.add(msg);
             }

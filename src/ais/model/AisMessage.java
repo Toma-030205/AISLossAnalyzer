@@ -1,5 +1,7 @@
 package ais.model;
 
+import java.time.LocalDateTime;
+
 public class AisMessage {
 
     // 共通
@@ -8,7 +10,7 @@ public class AisMessage {
     public String bits;
 
     // 時刻
-    public String timestamp;
+    public LocalDateTime timestamp;
 
     // Dynamic data (Type 1,2,3)
     public Double lat = null;
