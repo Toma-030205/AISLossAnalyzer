@@ -1,4 +1,4 @@
-package parser;
+package ais.parser;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -14,14 +14,12 @@ public class FileLoader {
 
             while ((line = br.readLine()) != null) {
 
-                // 1行表示
                 System.out.println(line);
 
             }
 
         } catch (IOException e) {
 
-            System.out.println("ファイル読み込みエラー");
             e.printStackTrace();
 
         }
