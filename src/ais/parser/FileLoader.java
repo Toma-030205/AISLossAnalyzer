@@ -43,6 +43,27 @@ public class FileLoader {
                     continue;
                 }
 
+                if (msg.messageType != 1
+                        && msg.messageType != 2
+                        && msg.messageType != 3) {
+                    continue;
+                }
+
+                if (msg.lat == null
+                        || msg.lon == null) {
+                    continue;
+                }
+
+                if (msg.lat > 90
+                        || msg.lat < -90) {
+                    continue;
+                }
+
+                if (msg.lon > 180
+                    || msg.lon < -180) {
+                    continue;
+                }
+
                 msg.timestamp =
                     LocalDateTime.parse(
                     timestamp,

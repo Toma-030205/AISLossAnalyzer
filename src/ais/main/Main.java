@@ -68,8 +68,14 @@ public class Main {
 
             VesselStatisticsResult result =
                     statistics.analyze(vessel);
+        
+        if (result.totalMessages < 100) {
+                    continue;
+        }
 
             System.out.println(result);
         }
+
+        
     }
 }
