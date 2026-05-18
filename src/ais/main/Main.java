@@ -61,21 +61,32 @@ public class Main {
             analyzer.analyze(vessel);
         }
 
-        VesselStatistics statistics =
-            new VesselStatistics();
+        for (int type : new int[]{1,2,3,5}) {
 
-        for (Vessel vessel : vesselMap.values()) {
+                System.out.println(
+                        "メッセージID：" + type
+                );
 
-            VesselStatisticsResult result =
-                    statistics.analyze(vessel);
-        
-        if (result.totalMessages < 100) {
-                    continue;
+                for (Vessel vessel : vesselMap.values()) {
+
+                        VesselStatisticsResult result =
+                                statistics.analyze(vessel);
+
+                        if (result.totalMessages < 100) {
+                        continue;
+                        }
+
+                        boolean hasType = vessel.getMessages()
+                                .stream()
+                                .anyMatch(m -> m.messageType == type);
+
+                        if (!hasType) {
+                        continue;
+                        }
+
+                        System.out.println(result);
+                }
         }
-
-            System.out.println(result);
-        }
-
-        
+   
     }
 }

@@ -23,6 +23,10 @@ public class ReportRateTable {
             return 10;
         }
 
+        if (msg.messageType == 5) {
+            return 360;
+        }
+
         // 高速
         return 6;
     }

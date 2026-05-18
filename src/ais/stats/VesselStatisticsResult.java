@@ -14,6 +14,10 @@ public class VesselStatisticsResult {
 
     public double averageDelta;
 
+    public double averageDistance;
+
+    public double maxDistance;
+
     @Override
     public String toString() {
 
@@ -24,5 +28,7 @@ public class VesselStatisticsResult {
                 + "%"
                 + " AVG_DELTA=" + String.format("%.1f", averageDelta)
                 + " MAX_DELTA=" + maxDelta;
+                + " AVG_DISTANCE="+ String.format("%.1f", averageDistance)+ "km"
+                + " MAX_DISTANCE="+ String.format("%.1f", maxDistance)+ "km"
     }
 }

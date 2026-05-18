@@ -17,25 +17,30 @@ public class VesselOrganizer {
 
         for (AisMessage msg : messages) {
 
-            // Dynamic AISのみ対象
             if (!(msg.messageType == 1
                     || msg.messageType == 2
-                    || msg.messageType == 3)) {
+                    || msg.messageType == 3
+                    || msg.messageType == 5)) {
 
                 continue;
             }
 
             // 無効座標除外
-            if (msg.lat == null
-                    || msg.lon == null) {
+            if (msg.messageType == 1
+                    || msg.messageType == 2
+                    || msg.messageType == 3) {
 
-                continue;
-            }
+                if (msg.lat == null
+                        || msg.lon == null) {
 
-            if (msg.lat == 91.0
-                    || msg.lon == 181.0) {
+                    continue;
+                }
 
-                continue;
+                if (msg.lat == 91.0
+                        || msg.lon == 181.0) {
+
+                    continue;
+                }
             }
 
             int mmsi = msg.mmsi;

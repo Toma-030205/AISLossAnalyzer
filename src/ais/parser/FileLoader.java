@@ -45,9 +45,15 @@ public class FileLoader {
 
                 if (msg.messageType != 1
                         && msg.messageType != 2
-                        && msg.messageType != 3) {
+                        && msg.messageType != 3
+                        && msg.messageType != 5) {
                     continue;
                 }
+
+                // Dynamic AIS(Type1,2,3)だけ座標チェック
+                if (msg.messageType == 1
+                        || msg.messageType == 2
+                        || msg.messageType == 3) {
 
                 if (msg.lat == null
                         || msg.lon == null) {
@@ -60,9 +66,10 @@ public class FileLoader {
                 }
 
                 if (msg.lon > 180
-                    || msg.lon < -180) {
+                        || msg.lon < -180) {
                     continue;
                 }
+            }
 
                 msg.timestamp =
                     LocalDateTime.parse(

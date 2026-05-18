@@ -35,6 +35,10 @@ public class VesselStatistics {
 
         int deltaCount = 0;
 
+        double distanceSum = 0;
+
+        double maxDistance = 0;
+
         for (int i = 0;
              i < messages.size() - 1;
              i++) {
@@ -64,6 +68,25 @@ public class VesselStatistics {
                             (double) actualDelta
                                     / expectedDelta
                     ) - 1;
+        
+                // Type1,2,3だけ距離計算
+                if (current.lat != null
+                        && current.lon != null) {
+
+                double distance =
+                        DistanceCalculator.haversine(
+                                current.lat,
+                                current.lon,
+                                34.718983358515715,
+                                135.29057866131427
+                        );
+
+                distanceSum += distance;
+
+                        if (distance > maxDistance) {
+                                maxDistance = distance;
+                        }
+                }
 
             // マイナス防止
             if (estimatedLoss < 0) {
@@ -89,6 +112,12 @@ public class VesselStatistics {
 
         result.averageDelta =
                 deltaSum / deltaCount;
+
+        result.averageDistance =
+                distanceSum / deltaCount;
+
+        result.maxDistance =
+                maxDistance;
 
         // 欠落率
         double denominator =
