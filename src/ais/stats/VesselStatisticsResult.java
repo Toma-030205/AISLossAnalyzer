@@ -19,16 +19,23 @@ public class VesselStatisticsResult {
     public double maxDistance;
 
     @Override
-    public String toString() {
+public String toString() {
 
-        return "MMSI=" + mmsi
-                + " TOTAL_MESSAGES=" + totalMessages
-                + " TOTAL_LOSS=" + totalEstimatedLoss
-                + " LOSS_RATE=" + String.format("%.2f", lossRate)
-                + "%"
-                + " AVG_DELTA=" + String.format("%.1f", averageDelta)
-                + " MAX_DELTA=" + maxDelta;
-                + " AVG_DISTANCE="+ String.format("%.1f", averageDistance)+ "km"
-                + " MAX_DISTANCE="+ String.format("%.1f", maxDistance)+ "km"
-    }
+    return "MMSI=" + mmsi
+            + " TOTAL_MESSAGES=" + totalMessages
+            + " TOTAL_LOSS=" + totalEstimatedLoss
+            + " LOSS_RATE="
+            + String.format("%.2f", lossRate)
+            + "%"
+            + " AVG_DELTA="
+            + String.format("%.1f", averageDelta)
+            + " MAX_DELTA="
+            + maxDelta
+            + " AVG_DISTANCE="
+            + String.format("%.1f", averageDistance)
+            + "km"
+            + " MAX_DISTANCE="
+            + String.format("%.1f", maxDistance)
+            + "km";
+}
 }

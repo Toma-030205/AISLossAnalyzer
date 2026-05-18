@@ -1,5 +1,6 @@
 package ais.stats;
 
+import ais.logic.DistanceCalculator;
 import ais.logic.ReportRateTable;
 import ais.model.AisMessage;
 import ais.model.Vessel;
@@ -39,6 +40,8 @@ public class VesselStatistics {
 
         double maxDistance = 0;
 
+        int distanceCount = 0;
+
         for (int i = 0;
              i < messages.size() - 1;
              i++) {
@@ -49,6 +52,20 @@ public class VesselStatistics {
             AisMessage next =
                     messages.get(i + 1);
 
+            // =====================================
+            // Type1 と Type5 のみ解析対象
+            // =====================================
+
+            if (current.messageType != 1
+                    && current.messageType != 5) {
+
+                continue;
+            }
+
+            // =====================================
+            // 実際の送信間隔
+            // =====================================
+
             double actualDeltaRaw =
                     Duration.between(
                             current.timestamp,
@@ -58,20 +75,80 @@ public class VesselStatistics {
             long actualDelta =
                     Math.round(actualDeltaRaw);
 
+            // =====================================
+            // 想定送信間隔
+            // =====================================
+
+            AisMessage prev = null;
+
+            if (i > 0) {
+                prev = messages.get(i - 1);
+            }
+
             long expectedDelta =
                     ReportRateTable
                             .getExpectedInterval(
-                                    current);
+                                    current,
+                                    prev);
 
-            long estimatedLoss =
-                    Math.round(
-                            (double) actualDelta
-                                    / expectedDelta
-                    ) - 1;
-        
-                // Type1,2,3だけ距離計算
-                if (current.lat != null
-                        && current.lon != null) {
+            // 不正防止
+            if (expectedDelta <= 0) {
+                continue;
+            }
+
+            // =====================================
+            // 欠落数推定
+            // =====================================
+
+            long estimatedLoss;
+
+            // Type5は切り捨ての方が安定
+            if (current.messageType == 5) {
+
+                estimatedLoss =
+                        (actualDelta / expectedDelta)
+                                - 1;
+
+            } else {
+
+                estimatedLoss =
+                        Math.round(
+                                (double) actualDelta
+                                        / expectedDelta
+                        ) - 1;
+            }
+
+            // マイナス防止
+            if (estimatedLoss < 0) {
+                estimatedLoss = 0;
+            }
+
+            totalLoss += estimatedLoss;
+
+            // =====================================
+            // 最大間隔
+            // =====================================
+
+            if (actualDelta > maxDelta) {
+                maxDelta = actualDelta;
+            }
+
+            // =====================================
+            // 平均間隔
+            // =====================================
+
+            deltaSum += actualDelta;
+
+            deltaCount++;
+
+            // =====================================
+            // 距離計算
+            // Type1のみ
+            // =====================================
+
+            if (current.messageType == 1
+                    && current.lat != null
+                    && current.lon != null) {
 
                 double distance =
                         DistanceCalculator.haversine(
@@ -83,26 +160,17 @@ public class VesselStatistics {
 
                 distanceSum += distance;
 
-                        if (distance > maxDistance) {
-                                maxDistance = distance;
-                        }
+                distanceCount++;
+
+                if (distance > maxDistance) {
+                    maxDistance = distance;
                 }
-
-            // マイナス防止
-            if (estimatedLoss < 0) {
-                estimatedLoss = 0;
             }
-
-            totalLoss += estimatedLoss;
-
-            if (actualDelta > maxDelta) {
-                maxDelta = actualDelta;
-            }
-
-            deltaSum += actualDelta;
-
-            deltaCount++;
         }
+
+        // =====================================
+        // 結果格納
+        // =====================================
 
         result.totalEstimatedLoss =
                 totalLoss;
@@ -110,16 +178,25 @@ public class VesselStatistics {
         result.maxDelta =
                 maxDelta;
 
-        result.averageDelta =
-                deltaSum / deltaCount;
+        if (deltaCount > 0) {
 
-        result.averageDistance =
-                distanceSum / deltaCount;
+            result.averageDelta =
+                    deltaSum / deltaCount;
+        }
+
+        if (distanceCount > 0) {
+
+            result.averageDistance =
+                    distanceSum / distanceCount;
+        }
 
         result.maxDistance =
                 maxDistance;
 
+        // =====================================
         // 欠落率
+        // =====================================
+
         double denominator =
                 result.totalMessages
                         + totalLoss;
