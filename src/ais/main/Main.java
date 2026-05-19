@@ -8,7 +8,6 @@ import ais.parser.FileLoader;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
-import java.util.Comparator;
 import ais.stats.VesselStatistics;
 import ais.stats.VesselStatisticsResult;
 import java.io.PrintWriter;
@@ -18,93 +17,91 @@ public class Main {
 
     public static void main(String[] args) {
 
-    String filePath =
-            "C:/Users/Owner/AISData/260401-0.ais";
+        String filePath =
+                "C:/Users/Owner/AISData/260401-0.ais";
 
-    FileLoader loader =
-            new FileLoader();
+        FileLoader loader =
+                new FileLoader();
 
-    List<AisMessage> messages =
-            loader.loadFile(filePath);
+        List<AisMessage> messages =
+                loader.loadFile(filePath);
 
-    System.out.println(
-            "===== AIS LOSS SUMMARY =====");
+        System.out.println(
+                "===== AIS LOSS SUMMARY =====");
 
-    System.out.println();
+        System.out.println();
 
-    System.out.println(
-            "総メッセージ数: "
-                    + messages.size());
+        System.out.println(
+                "総メッセージ数: "
+                        + messages.size());
 
-    VesselOrganizer organizer =
-            new VesselOrganizer();
+        VesselOrganizer organizer =
+                new VesselOrganizer();
 
-    Map<Integer, Vessel> vesselMap =
-            organizer.organizeByMmsi(messages);
+        Map<Integer, Vessel> vesselMap =
+                organizer.organizeByMmsi(messages);
 
-    System.out.println(
-            "総船舶数: "
-                    + vesselMap.size());
+        System.out.println(
+                "総船舶数: "
+                        + vesselMap.size());
 
-    // =====================================
-    // 結果保存用
-    // =====================================
+        List<VesselStatisticsResult> type1Results =
+                new ArrayList<>();
 
-    List<VesselStatisticsResult> type1Results =
-            new ArrayList<>();
+        List<VesselStatisticsResult> type5Results =
+                new ArrayList<>();
 
-    List<VesselStatisticsResult> type5Results =
-            new ArrayList<>();
+        VesselStatistics statistics =
+                new VesselStatistics();
 
-    VesselStatistics statistics =
-            new VesselStatistics();
-
-    // =====================================
-    // Message Typeごと解析
-    // =====================================
-
-    for (int type : new int[]{1, 5}) {
+        // =====================================
+        // Type1解析
+        // =====================================
 
         for (Vessel vessel : vesselMap.values()) {
 
-            boolean hasType =
-                    vessel.getMessages()
-                            .stream()
-                            .anyMatch(
-                                    m -> m.messageType == type);
-
-            if (!hasType) {
-                continue;
-            }
-
             VesselStatisticsResult result =
-                    statistics.analyze(vessel);
+                    statistics.analyze(vessel, 1);
 
             if (result.totalMessages < 100) {
                 continue;
             }
 
-            if (type == 1) {
-                type1Results.add(result);
-            }
-
-            if (type == 5) {
-                type5Results.add(result);
-            }
+            type1Results.add(result);
         }
-    }
 
-    // =====================================
-    // 統計表示
-    // =====================================
+        // =====================================
+        // Type5解析
+        // =====================================
 
-    printSummary(
-            "Message Type 1",
-            type1Results);
+        for (Vessel vessel : vesselMap.values()) {
 
-    printSummary(
-            "Message Type 5",
-            type5Results);
+            VesselStatisticsResult result =
+                    statistics.analyze(vessel, 5);
+
+            if (result.totalMessages < 10) {
+                continue;
+            }
+
+            // 距離情報が存在しない船は除外
+            if (Double.isNaN(result.averageDistance)) {
+                continue;
+            }
+
+            type5Results.add(result);
+        }
+
+        // =====================================
+        // 表示
+        // =====================================
+
+        printSummary(
+                "Message Type 1",
+                type1Results);
+
+        printSummary(
+                "Message Type 5",
+                type5Results);
 
         // =====================================
         // CSV出力
@@ -117,9 +114,8 @@ public class Main {
         exportCsv(
                 "type5_distance_loss.csv",
                 type5Results);
-        }
-    
-    
+    }
+
     private static void printSummary(
         String title,
         List<VesselStatisticsResult> results) {
@@ -131,133 +127,151 @@ public class Main {
 
     System.out.println();
 
+    // =====================================
+    // 船舶数
+    // =====================================
+
     System.out.println(
             "解析対象船舶数: "
                     + results.size());
 
-    // =========================
-    // 平均欠落率
-    // =========================
+    // =====================================
+    // 空チェック
+    // =====================================
 
-    double avgLoss =
-            results.stream()
-                    .mapToDouble(
-                            r -> r.lossRate)
-                    .average()
-                    .orElse(0);
-
-    // =========================
-    // 最大欠落率
-    // =========================
-
-    double maxLoss =
-            results.stream()
-                    .mapToDouble(
-                            r -> r.lossRate)
-                    .max()
-                    .orElse(0);
-
-    // =========================
-    // 平均距離
-    // =========================
-
-    double avgDistance =
-            results.stream()
-                    .mapToDouble(
-                            r -> r.averageDistance)
-                    .average()
-                    .orElse(0);
-
-    // =========================
-    // 最大距離
-    // =========================
-
-    double maxDistance =
-            results.stream()
-                    .mapToDouble(
-                            r -> r.maxDistance)
-                    .max()
-                    .orElse(0);
-
-    // =========================
-    // 中央値
-    // =========================
-
-    List<Double> sortedLossRates =
-            results.stream()
-                    .map(r -> r.lossRate)
-                    .sorted()
-                    .toList();
-
-    double medianLoss = 0;
-
-    if (!sortedLossRates.isEmpty()) {
-
-        int middle =
-                sortedLossRates.size() / 2;
-
-        medianLoss =
-                sortedLossRates.get(middle);
+    if (results.isEmpty()) {
+        return;
     }
 
-    // =========================
-    // 出力
-    // =========================
+    // =====================================
+    // 統計計算用
+    // =====================================
+
+    double lossRateSum = 0;
+
+    double maxLossRate = 0;
+
+    double distanceSum = 0;
+
+    double maxDistance = 0;
+
+    List<Double> lossRates =
+            new ArrayList<>();
+
+    // =====================================
+    // 集計
+    // =====================================
+
+    for (VesselStatisticsResult r : results) {
+
+        // 欠落率
+        lossRateSum += r.lossRate;
+
+        lossRates.add(r.lossRate);
+
+        if (r.lossRate > maxLossRate) {
+            maxLossRate = r.lossRate;
+        }
+
+        // 距離
+        distanceSum += r.averageDistance;
+
+        if (r.maxDistance > maxDistance) {
+            maxDistance = r.maxDistance;
+        }
+    }
+
+    // =====================================
+    // 平均
+    // =====================================
+
+    double averageLossRate =
+            lossRateSum / results.size();
+
+    double averageDistance =
+            distanceSum / results.size();
+
+    // =====================================
+    // 中央値
+    // =====================================
+
+    lossRates.sort(Double::compareTo);
+
+    double medianLossRate;
+
+    int n = lossRates.size();
+
+    if (n % 2 == 0) {
+
+        medianLossRate =
+                (lossRates.get(n / 2 - 1)
+                        + lossRates.get(n / 2))
+                        / 2.0;
+
+    } else {
+
+        medianLossRate =
+                lossRates.get(n / 2);
+    }
+
+    // =====================================
+    // 表示
+    // =====================================
 
     System.out.printf(
             "平均欠落率: %.2f%%\n",
-            avgLoss);
+            averageLossRate);
 
     System.out.printf(
             "中央値: %.2f%%\n",
-            medianLoss);
+            medianLossRate);
 
     System.out.printf(
             "最大欠落率: %.2f%%\n",
-            maxLoss);
+            maxLossRate);
 
     System.out.println();
 
     System.out.printf(
             "平均距離: %.1fkm\n",
-            avgDistance);
+            averageDistance);
 
     System.out.printf(
             "最大距離: %.1fkm\n",
             maxDistance);
+
+    System.out.println();
 }
 
-        private static void exportCsv(
-        String fileName,
-        List<VesselStatisticsResult> results) {
+    private static void exportCsv(
+            String fileName,
+            List<VesselStatisticsResult> results) {
 
-    try {
+        try {
 
-        PrintWriter writer =
-                new PrintWriter(fileName);
-
-        // ヘッダ
-        writer.println(
-                "MMSI,LOSS_RATE,AVG_DISTANCE");
-
-        // データ
-        for (VesselStatisticsResult r : results) {
+            PrintWriter writer =
+                    new PrintWriter(fileName);
 
             writer.println(
-                    r.mmsi + ","
-                    + r.lossRate + ","
-                    + r.averageDistance
-            );
+                    "MMSI,LOSS_RATE,AVG_DISTANCE");
+
+            for (VesselStatisticsResult r : results) {
+
+                writer.println(
+                        r.mmsi + ","
+                                + r.lossRate + ","
+                                + r.averageDistance
+                );
+            }
+
+            writer.close();
+
+            System.out.println(
+                    "CSV出力完了: " + fileName);
+
+        } catch (FileNotFoundException e) {
+
+            e.printStackTrace();
         }
-
-        writer.close();
-
-        System.out.println(
-                "CSV出力完了: " + fileName);
-
-    } catch (FileNotFoundException e) {
-
-        e.printStackTrace();
     }
-}
 }
