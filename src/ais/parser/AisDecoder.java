@@ -191,72 +191,127 @@ public class AisDecoder {
 
     private static AisMessage build(String bits) {
 
-        if (bits == null || bits.length() < 38) {
+    if (bits == null || bits.length() < 38) {
 
-            return null;
-        }
-
-        try {
-
-            int type =
-                    Integer.parseInt(bits.substring(0, 6), 2);
-
-            int mmsi =
-                    Integer.parseInt(bits.substring(8, 38), 2);
-
-            AisMessage msg = new AisMessage();
-
-            msg.messageType = type;
-            msg.mmsi = mmsi;
-            msg.bits = bits;
-
-            // Type 1,2,3
-            if (type == 1 || type == 2 || type == 3) {
-
-                if (bits.length() >= 137) {
-
-                    msg.navStatus =
-                            Integer.parseInt(
-                                    bits.substring(38, 42), 2);
-
-                    msg.sog =
-                            Integer.parseInt(
-                                    bits.substring(50, 60), 2) / 10.0;
-
-                    msg.lon =
-                            twosComp(
-                                    bits.substring(61, 89))
-                                    / 600000.0;
-
-                    msg.lat =
-                            twosComp(
-                                    bits.substring(89, 116))
-                                    / 600000.0;
-
-                    msg.cog =
-                            Integer.parseInt(
-                                    bits.substring(116, 128), 2)
-                                    / 10.0;
-
-                    msg.trueHeading =
-                            (double) Integer.parseInt(
-                                    bits.substring(128, 137), 2);
-                }
-            }
-
-            // Type 5
-            if (type == 5) {
-
-                parseType5(msg, bits);
-            }
-
-            return msg;
-
-        } catch (Exception e) {
-
-            return null;
-        }
+        return null;
     }
+
+    try {
+
+        int type =
+                Integer.parseInt(
+                        bits.substring(0, 6),
+                        2);
+
+        int mmsi =
+                Integer.parseInt(
+                        bits.substring(8, 38),
+                        2);
+
+        AisMessage msg =
+                new AisMessage();
+
+        msg.messageType = type;
+        msg.mmsi = mmsi;
+        msg.bits = bits;
+
+        // ==========================
+        // Type 1,2,3 (Class A)
+        // ==========================
+        if (type == 1
+                || type == 2
+                || type == 3) {
+
+            if (bits.length() >= 137) {
+
+                msg.navStatus =
+                        Integer.parseInt(
+                                bits.substring(38, 42),
+                                2);
+
+                msg.sog =
+                        Integer.parseInt(
+                                bits.substring(50, 60),
+                                2)
+                                / 10.0;
+
+                msg.lon =
+                        twosComp(
+                                bits.substring(61, 89))
+                                / 600000.0;
+
+                msg.lat =
+                        twosComp(
+                                bits.substring(89, 116))
+                                / 600000.0;
+
+                msg.cog =
+                        Integer.parseInt(
+                                bits.substring(116, 128),
+                                2)
+                                / 10.0;
+
+                msg.trueHeading =
+                        (double)
+                        Integer.parseInt(
+                                bits.substring(128, 137),
+                                2);
+            }
+        }
+
+        // ==========================
+        // Type18 (Class B)
+        // ==========================
+        if (type == 18) {
+
+            if (bits.length() >= 133) {
+
+                msg.sog =
+                        Integer.parseInt(
+                                bits.substring(46, 56),
+                                2)
+                                / 10.0;
+
+                msg.lon =
+                        twosComp(
+                                bits.substring(57, 85))
+                                / 600000.0;
+
+                msg.lat =
+                        twosComp(
+                                bits.substring(85, 112))
+                                / 600000.0;
+
+                msg.cog =
+                        Integer.parseInt(
+                                bits.substring(112, 124),
+                                2)
+                                / 10.0;
+
+                msg.trueHeading =
+                        (double)
+                        Integer.parseInt(
+                                bits.substring(124, 133),
+                                2);
+            }
+        }
+
+        // ==========================
+        // Type5
+        // ==========================
+        if (type == 5) {
+
+            parseType5(msg, bits);
+
+        }
+
+        return msg;
+
+    } catch (Exception e) {
+
+        return null;
+    }
+}
 
     private static void parseType5(
             AisMessage msg,
@@ -288,6 +343,23 @@ public class AisDecoder {
             msg.shipType =
                     Integer.parseInt(
                             bits.substring(232, 240), 2);
+        }
+
+        if (len >= 270) {
+
+            int toBow =
+                    Integer.parseInt(
+                            bits.substring(240,249),
+                            2);
+
+            int toStern =
+                    Integer.parseInt(
+                            bits.substring(249,258),
+                            2);
+
+            msg.shipLength =
+                    toBow + toStern;
+            
         }
 
         if (len >= 422) {

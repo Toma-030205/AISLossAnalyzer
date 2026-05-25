@@ -46,14 +46,17 @@ public class FileLoader {
                 if (msg.messageType != 1
                         && msg.messageType != 2
                         && msg.messageType != 3
-                        && msg.messageType != 5) {
+                        && msg.messageType != 5
+                        && msg.messageType != 18) {
                     continue;
                 }
 
                 // Dynamic AIS(Type1,2,3)だけ座標チェック
                 if (msg.messageType == 1
                         || msg.messageType == 2
-                        || msg.messageType == 3) {
+                        || msg.messageType == 3
+                        || msg.messageType == 18
+                        ) {
 
                 if (msg.lat == null
                         || msg.lon == null) {

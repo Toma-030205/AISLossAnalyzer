@@ -7,6 +7,7 @@ import java.util.Comparator;
 public class Vessel {
 
     private int mmsi;
+    private Integer shipLength;
 
     private List<AisMessage> messages =
             new ArrayList<>();
@@ -36,5 +37,16 @@ public class Vessel {
         messages.sort(
                 Comparator.comparing(m -> m.timestamp)
         );
+    }
+
+    public void setShipLength(
+            Integer length) {
+
+        shipLength = length;
+    }
+
+    public Integer getShipLength() {
+
+        return shipLength;
     }
 }

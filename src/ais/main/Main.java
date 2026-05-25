@@ -83,11 +83,6 @@ public class Main {
                 continue;
             }
 
-            // 距離情報が存在しない船は除外
-            if (Double.isNaN(result.averageDistance)) {
-                continue;
-            }
-
             type5Results.add(result);
         }
 
@@ -114,6 +109,10 @@ public class Main {
         exportCsv(
                 "type5_distance_loss.csv",
                 type5Results);
+        
+        exportCsv(
+                "type1_distance_loss_with_length.csv",
+                type1Results);
     }
 
     private static void printSummary(
@@ -173,9 +172,6 @@ public class Main {
             maxLossRate = r.lossRate;
         }
 
-        // 距離
-        distanceSum += r.averageDistance;
-
         if (r.maxDistance > maxDistance) {
             maxDistance = r.maxDistance;
         }
@@ -233,10 +229,6 @@ public class Main {
     System.out.println();
 
     System.out.printf(
-            "平均距離: %.1fkm\n",
-            averageDistance);
-
-    System.out.printf(
             "最大距離: %.1fkm\n",
             maxDistance);
 
@@ -244,34 +236,53 @@ public class Main {
 }
 
     private static void exportCsv(
-            String fileName,
-            List<VesselStatisticsResult> results) {
+        String fileName,
+        List<VesselStatisticsResult> results) {
 
-        try {
+    try {
 
-            PrintWriter writer =
-                    new PrintWriter(fileName);
+        PrintWriter writer =
+                new PrintWriter(
+                        fileName);
 
-            writer.println(
-                    "MMSI,LOSS_RATE,AVG_DISTANCE");
+        writer.println(
+                "MMSI,LOSS_COUNT,DISTANCE,SHIP_LENGTH");
 
-            for (VesselStatisticsResult r : results) {
+        for (
+                VesselStatisticsResult r
+                : results
+        ) {
+
+            for (
+                    int i = 0;
+                    i < r.lossDistances.size();
+                    i++
+            ) {
 
                 writer.println(
-                        r.mmsi + ","
-                                + r.lossRate + ","
-                                + r.averageDistance
+                        r.mmsi
+                        + ","
+                        + r.lossCounts.get(i)
+                        + ","
+                        + r.lossDistances.get(i)
+                        + ","
+                        + (
+                        r.shipLength
+                                == null
+                                ? ""
+                                : r.shipLength
+                )
                 );
             }
-
-            writer.close();
-
-            System.out.println(
-                    "CSV出力完了: " + fileName);
-
-        } catch (FileNotFoundException e) {
-
-            e.printStackTrace();
         }
+
+        writer.close();
+
+    } catch (
+            FileNotFoundException e
+    ) {
+
+        e.printStackTrace();
     }
+}
 }

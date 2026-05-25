@@ -26,6 +26,7 @@ public class AisMessage {
     public String vesselName = null;
     public Integer shipType = null;
     public String destination = null;
+    public Integer shipLength = null;
 
     @Override
     public String toString() {
@@ -38,6 +39,7 @@ public class AisMessage {
                 ", lon=" + lon +
                 ", sog=" + sog +
                 ", vesselName='" + vesselName + '\'' +
+                ", shipLength=" + shipLength +
                 '}';
     }
 }
