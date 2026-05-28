@@ -162,8 +162,8 @@ public class VesselStatistics {
             Double lat = null;
             Double lon = null;
 
-            // Type1/2/3
-            if ((targetType == 1)
+            // Type1/18
+            if ((targetType == 1 || targetType == 18)
                     && current.lat != null
                     && current.lon != null) {
 

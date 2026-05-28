@@ -51,6 +51,9 @@ public class Main {
         List<VesselStatisticsResult> type5Results =
                 new ArrayList<>();
 
+        List<VesselStatisticsResult> type18Results =
+                new ArrayList<>();
+
         VesselStatistics statistics =
                 new VesselStatistics();
 
@@ -87,6 +90,22 @@ public class Main {
         }
 
         // =====================================
+        // Type18隗｣譫・
+        // =====================================
+
+        for (Vessel vessel : vesselMap.values()) {
+
+            VesselStatisticsResult result =
+                    statistics.analyze(vessel, 18);
+
+            if (result.totalMessages < 100) {
+                continue;
+            }
+
+            type18Results.add(result);
+        }
+
+        // =====================================
         // 表示
         // =====================================
 
@@ -97,6 +116,10 @@ public class Main {
         printSummary(
                 "Message Type 5",
                 type5Results);
+
+        printSummary(
+                "Message Type 18",
+                type18Results);
 
         // =====================================
         // CSV出力
@@ -109,10 +132,10 @@ public class Main {
         exportCsv(
                 "type5_distance_loss.csv",
                 type5Results);
-        
+
         exportCsv(
-                "type1_distance_loss_with_length.csv",
-                type1Results);
+                "type18_distance_loss.csv",
+                type18Results);
     }
 
     private static void printSummary(

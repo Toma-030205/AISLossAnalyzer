@@ -300,6 +300,7 @@ public class AisDecoder {
         // Type5
         // ==========================
         if (type == 5) {
+            
 
             parseType5(msg, bits);
 
@@ -359,6 +360,7 @@ public class AisDecoder {
 
             msg.shipLength =
                     toBow + toStern;
+        
             
         }
 

@@ -36,10 +36,15 @@ public class GapAnalyzer {
             long actualDelta =
                     Math.round(actualDeltaRaw);
 
-            long expectedDelta =
+            double expectedDelta =
                     ReportRateTable
                             .getExpectedInterval(
-                                    current);
+                                    current,
+                                    i > 0 ? messages.get(i - 1) : null);
+
+            if (expectedDelta <= 0) {
+                continue;
+            }
 
             // 欠落推定回数
             long estimatedLoss =
