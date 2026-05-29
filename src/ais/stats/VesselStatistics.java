@@ -10,6 +10,15 @@ import java.util.List;
 
 public class VesselStatistics {
 
+    private static final double RECEIVER_LAT =
+            34.718983358515715;
+
+    private static final double RECEIVER_LON =
+            135.29057866131427;
+
+    private static final double MAX_DISTANCE_JUMP_KM =
+            30.0;
+
     public VesselStatisticsResult analyze(
             Vessel vessel,
             int targetType) {
@@ -71,8 +80,6 @@ public class VesselStatistics {
                 continue;
             }
 
-            validMessageCount++;
-
             // =====================================
             // 実際間隔
             // =====================================
@@ -106,6 +113,30 @@ public class VesselStatistics {
                 continue;
             }
 
+            Double currentDistance =
+                    getDistance(
+                            targetType,
+                            current,
+                            latestLat,
+                            latestLon);
+
+            Double nextDistance =
+                    getDistance(
+                            targetType,
+                            next,
+                            latestLat,
+                            latestLon);
+
+            if (currentDistance != null
+                    && nextDistance != null
+                    && Math.abs(currentDistance - nextDistance)
+                    > MAX_DISTANCE_JUMP_KM) {
+
+                continue;
+            }
+
+            validMessageCount++;
+
         // =====================================
         // 欠落推定
         // =====================================
@@ -133,11 +164,12 @@ public class VesselStatistics {
         }
 
         // 欠落なしは除外
-        if (estimatedLoss == 0) {
-        continue;
-        }
+        long lossCount =
+                Math.max(
+                        0,
+                        (long) Math.ceil(estimatedLoss));
 
-        totalLoss += Math.ceil(estimatedLoss);
+        totalLoss += lossCount;
 
             // =====================================
             // 最大間隔
@@ -159,42 +191,21 @@ public class VesselStatistics {
             // 距離計算
             // =====================================
 
-            Double lat = null;
-            Double lon = null;
+            if (currentDistance != null) {
 
-            // Type1/18
-            if ((targetType == 1 || targetType == 18)
-                    && current.lat != null
-                    && current.lon != null) {
+                result.addDistanceBin(
+                        currentDistance,
+                        lossCount);
 
-                lat = current.lat;
-                lon = current.lon;
-            }
+                if (lossCount > 0) {
 
-            // Type5
-            if (targetType == 5
-                    && latestLat != null
-                    && latestLon != null) {
+                    result.lossDistances.add(currentDistance);
 
-                lat = latestLat;
-                lon = latestLon;
-            }
+                    result.lossCounts.add(lossCount);
 
-            if (lat != null && lon != null && estimatedLoss > 0) {
-
-                double distance = DistanceCalculator.haversine(
-                            lat,
-                            lon,
-                            34.718983358515715,
-                            135.29057866131427
-                    );
-
-                result.lossDistances.add(distance);
-
-                result.lossCounts.add(Math.max(1,(long)Math.ceil(estimatedLoss)));
-
-                if (distance > maxDistance) {
-                        maxDistance =distance;
+                    if (currentDistance > maxDistance) {
+                            maxDistance =currentDistance;
+                    }
                 }
         }
 }
@@ -234,5 +245,49 @@ public class VesselStatistics {
         }
 
         return result;
+    }
+
+    private static Double getDistance(
+            int targetType,
+            AisMessage msg,
+            Double latestLat,
+            Double latestLon) {
+
+        Double lat = null;
+        Double lon = null;
+
+        if ((targetType == 1 || targetType == 18)
+                && msg.lat != null
+                && msg.lon != null) {
+
+            lat = msg.lat;
+            lon = msg.lon;
+        }
+
+        if (targetType == 5) {
+
+            if (msg.lat != null
+                    && msg.lon != null) {
+
+                lat = msg.lat;
+                lon = msg.lon;
+
+            } else if (latestLat != null
+                    && latestLon != null) {
+
+                lat = latestLat;
+                lon = latestLon;
+            }
+        }
+
+        if (lat == null || lon == null) {
+            return null;
+        }
+
+        return DistanceCalculator.haversine(
+                lat,
+                lon,
+                RECEIVER_LAT,
+                RECEIVER_LON);
     }
 }

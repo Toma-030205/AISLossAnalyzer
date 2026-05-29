@@ -8,6 +8,7 @@ import ais.parser.FileLoader;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import ais.stats.DistanceBinStatistics;
 import ais.stats.VesselStatistics;
 import ais.stats.VesselStatisticsResult;
 import java.io.PrintWriter;
@@ -269,7 +270,7 @@ public class Main {
                         fileName);
 
         writer.println(
-                "MMSI,LOSS_COUNT,DISTANCE,SHIP_LENGTH");
+                "MMSI,DISTANCE_BIN,SHIP_LENGTH,OBSERVED,EXPECTED,LOSS,LOSS_RATE,AVG_DISTANCE");
 
         for (
                 VesselStatisticsResult r
@@ -277,17 +278,14 @@ public class Main {
         ) {
 
             for (
-                    int i = 0;
-                    i < r.lossDistances.size();
-                    i++
+                    DistanceBinStatistics bin
+                    : r.getDistanceBins()
             ) {
 
                 writer.println(
                         r.mmsi
                         + ","
-                        + r.lossCounts.get(i)
-                        + ","
-                        + r.lossDistances.get(i)
+                        + bin.getBinLabel()
                         + ","
                         + (
                         r.shipLength
@@ -295,6 +293,16 @@ public class Main {
                                 ? ""
                                 : r.shipLength
                 )
+                        + ","
+                        + bin.observed
+                        + ","
+                        + bin.getExpected()
+                        + ","
+                        + bin.loss
+                        + ","
+                        + bin.getLossRate()
+                        + ","
+                        + bin.getAverageDistance()
                 );
             }
         }
