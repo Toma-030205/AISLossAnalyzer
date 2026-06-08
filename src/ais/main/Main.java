@@ -1,16 +1,16 @@
 package ais.main;
 
-import ais.logic.VesselOrganizer;
-import ais.model.AisMessage;
-import ais.model.Vessel;
 import ais.parser.FileLoader;
+import ais.stats.DailyStatisticsResult;
+import ais.stats.DistanceBinStatistics;
+import ais.stats.StreamingVesselStatistics;
+import ais.stats.VesselStatisticsResult;
 
 import java.util.List;
-import java.util.Map;
 import java.util.ArrayList;
-import ais.stats.DistanceBinStatistics;
-import ais.stats.VesselStatistics;
-import ais.stats.VesselStatisticsResult;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.io.File;
 import java.io.PrintWriter;
 import java.io.FileNotFoundException;
 
@@ -18,14 +18,58 @@ public class Main {
 
     public static void main(String[] args) {
 
-        String filePath =
-                "C:/Users/Owner/AISData/260401-0.ais";
+        String dataDirPath =
+                "C:/Users/Owner/AISData";
 
         FileLoader loader =
                 new FileLoader();
 
-        List<AisMessage> messages =
-                loader.loadFile(filePath);
+        StreamingVesselStatistics statistics =
+                new StreamingVesselStatistics();
+
+        long totalMessages =
+                0;
+
+        File[] dataFiles =
+                new File(dataDirPath)
+                        .listFiles((dir, name) ->
+                                name.toLowerCase()
+                                        .endsWith(".ais"));
+
+        if (dataFiles == null || dataFiles.length == 0) {
+
+            System.out.println(
+                    "AIS files not found: "
+                            + dataDirPath);
+
+            return;
+        }
+
+        Arrays.sort(
+                dataFiles,
+                Comparator.comparing(
+                        File::getName));
+
+        for (File dataFile : dataFiles) {
+
+            System.out.println(
+                    "Loading: "
+                            + dataFile.getName());
+
+            final long[] fileMessageCount =
+                    {0};
+
+            loader.loadFile(
+                    dataFile.getAbsolutePath(),
+                    msg -> {
+
+                        statistics.accept(msg);
+                        fileMessageCount[0]++;
+                    });
+
+            totalMessages +=
+                    fileMessageCount[0];
+        }
 
         System.out.println(
                 "===== AIS LOSS SUMMARY =====");
@@ -34,77 +78,38 @@ public class Main {
 
         System.out.println(
                 "総メッセージ数: "
-                        + messages.size());
-
-        VesselOrganizer organizer =
-                new VesselOrganizer();
-
-        Map<Integer, Vessel> vesselMap =
-                organizer.organizeByMmsi(messages);
+                        + totalMessages);
 
         System.out.println(
                 "総船舶数: "
-                        + vesselMap.size());
+                        + statistics.getVesselCount());
 
         List<VesselStatisticsResult> type1Results =
-                new ArrayList<>();
+                statistics.getResults(
+                        1,
+                        100);
 
         List<VesselStatisticsResult> type5Results =
-                new ArrayList<>();
+                statistics.getResults(
+                        5,
+                        10);
 
         List<VesselStatisticsResult> type18Results =
-                new ArrayList<>();
-
-        VesselStatistics statistics =
-                new VesselStatistics();
+                statistics.getResults(
+                        18,
+                        100);
 
         // =====================================
         // Type1解析
         // =====================================
 
-        for (Vessel vessel : vesselMap.values()) {
-
-            VesselStatisticsResult result =
-                    statistics.analyze(vessel, 1);
-
-            if (result.totalMessages < 100) {
-                continue;
-            }
-
-            type1Results.add(result);
-        }
-
         // =====================================
         // Type5解析
         // =====================================
 
-        for (Vessel vessel : vesselMap.values()) {
-
-            VesselStatisticsResult result =
-                    statistics.analyze(vessel, 5);
-
-            if (result.totalMessages < 10) {
-                continue;
-            }
-
-            type5Results.add(result);
-        }
-
         // =====================================
         // Type18隗｣譫・
         // =====================================
-
-        for (Vessel vessel : vesselMap.values()) {
-
-            VesselStatisticsResult result =
-                    statistics.analyze(vessel, 18);
-
-            if (result.totalMessages < 100) {
-                continue;
-            }
-
-            type18Results.add(result);
-        }
 
         // =====================================
         // 表示
@@ -137,6 +142,18 @@ public class Main {
         exportCsv(
                 "type18_distance_loss.csv",
                 type18Results);
+
+        exportDailyCsv(
+                "type1_daily_distance_loss.csv",
+                statistics.getDailyResults(1));
+
+        exportDailyCsv(
+                "type5_daily_distance_loss.csv",
+                statistics.getDailyResults(5));
+
+        exportDailyCsv(
+                "type18_daily_distance_loss.csv",
+                statistics.getDailyResults(18));
     }
 
     private static void printSummary(
@@ -284,6 +301,70 @@ public class Main {
 
                 writer.println(
                         r.mmsi
+                        + ","
+                        + bin.getBinLabel()
+                        + ","
+                        + (
+                        r.shipLength
+                                == null
+                                ? ""
+                                : r.shipLength
+                )
+                        + ","
+                        + bin.observed
+                        + ","
+                        + bin.getExpected()
+                        + ","
+                        + bin.loss
+                        + ","
+                        + bin.getLossRate()
+                        + ","
+                        + bin.getAverageDistance()
+                );
+            }
+        }
+
+        writer.close();
+
+    } catch (
+            FileNotFoundException e
+    ) {
+
+        e.printStackTrace();
+    }
+}
+
+    private static void exportDailyCsv(
+        String fileName,
+        List<DailyStatisticsResult> results) {
+
+    try {
+
+        PrintWriter writer =
+                new PrintWriter(
+                        fileName);
+
+        writer.println(
+                "DATE,DAY_OF_WEEK,MESSAGE_TYPE,MMSI,DISTANCE_BIN,SHIP_LENGTH,OBSERVED,EXPECTED,LOSS,LOSS_RATE,AVG_DISTANCE");
+
+        for (
+                DailyStatisticsResult r
+                : results
+        ) {
+
+            for (
+                    DistanceBinStatistics bin
+                    : r.getDistanceBins()
+            ) {
+
+                writer.println(
+                        r.date
+                        + ","
+                        + r.dayOfWeek
+                        + ","
+                        + r.messageType
+                        + ","
+                        + r.mmsi
                         + ","
                         + bin.getBinLabel()
                         + ","

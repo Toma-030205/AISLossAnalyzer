@@ -6,6 +6,7 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -18,6 +19,17 @@ public class FileLoader {
 
         List<AisMessage> messages =
                 new ArrayList<>();
+
+        loadFile(
+                filePath,
+                messages::add);
+
+        return messages;
+    }
+
+    public void loadFile(
+            String filePath,
+            Consumer<AisMessage> consumer) {
 
         try (BufferedReader br =
                      new BufferedReader(
@@ -80,14 +92,12 @@ public class FileLoader {
                     formatter
                 );
 
-                messages.add(msg);
+                consumer.accept(msg);
             }
 
         } catch (Exception e) {
 
             e.printStackTrace();
         }
-
-        return messages;
     }
 }

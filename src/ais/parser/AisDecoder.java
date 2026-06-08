@@ -176,14 +176,16 @@ public class AisDecoder {
                 val -= 8;
             }
 
-            String bin =
-                    Integer.toBinaryString(val & 0x3F);
+            int sixBit =
+                    val & 0x3F;
 
-            String padded =
-                    String.format("%6s", bin)
-                            .replace(' ', '0');
+            for (int bit = 5; bit >= 0; bit--) {
 
-            sb.append(padded);
+                sb.append(
+                        ((sixBit >> bit) & 1) == 1
+                                ? '1'
+                                : '0');
+            }
         }
 
         return sb.toString();
@@ -213,7 +215,7 @@ public class AisDecoder {
 
         msg.messageType = type;
         msg.mmsi = mmsi;
-        msg.bits = bits;
+        msg.bits = null;
 
         // ==========================
         // Type 1,2,3 (Class A)
