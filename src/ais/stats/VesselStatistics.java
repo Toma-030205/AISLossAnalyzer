@@ -19,6 +19,11 @@ public class VesselStatistics {
     private static final double MAX_DISTANCE_JUMP_KM =
             30.0;
 
+    private static final long MAX_INTERVAL_SECONDS =
+            Long.getLong(
+                    "ais.maxIntervalSeconds",
+                    3600L);
+
     public VesselStatisticsResult analyze(
             Vessel vessel,
             int targetType) {
@@ -92,6 +97,10 @@ public class VesselStatistics {
 
             long actualDelta =
                     Math.round(actualDeltaRaw);
+
+            if (actualDelta > MAX_INTERVAL_SECONDS) {
+                continue;
+            }
 
             // =====================================
             // 想定間隔

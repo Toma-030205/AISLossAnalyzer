@@ -23,6 +23,11 @@ public class StreamingVesselStatistics {
     private static final double MAX_DISTANCE_JUMP_KM =
             30.0;
 
+    private static final long MAX_INTERVAL_SECONDS =
+            Long.getLong(
+                    "ais.maxIntervalSeconds",
+                    3600L);
+
     private final Map<Integer, VesselState> vessels =
             new HashMap<>();
 
@@ -242,6 +247,19 @@ public class StreamingVesselStatistics {
                 return;
             }
 
+            double actualDeltaRaw =
+                    Duration.between(
+                            currentMsg.timestamp,
+                            nextMsg.timestamp)
+                            .toMillis() / 1000.0;
+
+            long actualDelta =
+                    Math.round(actualDeltaRaw);
+
+            if (actualDelta > MAX_INTERVAL_SECONDS) {
+                return;
+            }
+
             Double currentDistance =
                     getDistance(
                             targetType,
@@ -263,15 +281,6 @@ public class StreamingVesselStatistics {
 
                 return;
             }
-
-            double actualDeltaRaw =
-                    Duration.between(
-                            currentMsg.timestamp,
-                            nextMsg.timestamp)
-                            .toMillis() / 1000.0;
-
-            long actualDelta =
-                    Math.round(actualDeltaRaw);
 
             double estimatedLoss;
 
