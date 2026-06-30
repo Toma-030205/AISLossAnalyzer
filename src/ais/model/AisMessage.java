@@ -19,6 +19,8 @@ public class AisMessage {
     public Double cog = null;
     public Double trueHeading = null;
     public Integer navStatus = null;
+    public Boolean classBCsUnit = null;
+    public Boolean assignedMode = null;
 
     // Static data (Type 5)
     public Integer imo = null;

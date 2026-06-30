@@ -1,7 +1,9 @@
 package ais.stats;
 
+import ais.logic.AisAnalysisRules;
 import ais.logic.DistanceCalculator;
-import ais.logic.ReportRateTable;
+import ais.logic.LossEstimator;
+import ais.logic.ReportRateTracker;
 import ais.model.AisMessage;
 
 import java.time.Duration;
@@ -22,11 +24,6 @@ public class StreamingVesselStatistics {
 
     private static final double MAX_DISTANCE_JUMP_KM =
             30.0;
-
-    private static final long MAX_INTERVAL_SECONDS =
-            Long.getLong(
-                    "ais.maxIntervalSeconds",
-                    3600L);
 
     private final Map<Integer, VesselState> vessels =
             new HashMap<>();
@@ -129,11 +126,8 @@ public class StreamingVesselStatistics {
 
     private static boolean isTargetMessage(AisMessage msg) {
 
-        return msg.messageType == 1
-                || msg.messageType == 2
-                || msg.messageType == 3
-                || msg.messageType == 5
-                || msg.messageType == 18;
+        return AisAnalysisRules.getAnalysisType(
+                msg.messageType) > 0;
     }
 
     private static boolean isDynamicMessage(AisMessage msg) {
@@ -144,22 +138,11 @@ public class StreamingVesselStatistics {
                 || msg.messageType == 18;
     }
 
-    private static boolean isAnalyzedType(int messageType) {
-
-        return messageType == 1
-                || messageType == 5
-                || messageType == 18;
-    }
-
     private static class VesselState {
 
         final int mmsi;
 
         Integer shipLength;
-
-        AisMessage previous;
-
-        AisMessage current;
 
         Double latestLat;
 
@@ -171,6 +154,9 @@ public class StreamingVesselStatistics {
         final Map<Integer, Map<LocalDate, TypeState>> dailyTypeStates =
                 new HashMap<>();
 
+        final Map<Integer, IntervalCursor> intervalCursors =
+                new HashMap<>();
+
         VesselState(int mmsi) {
 
             this.mmsi = mmsi;
@@ -180,6 +166,9 @@ public class StreamingVesselStatistics {
             dailyTypeStates.put(1, new HashMap<>());
             dailyTypeStates.put(5, new HashMap<>());
             dailyTypeStates.put(18, new HashMap<>());
+            intervalCursors.put(1, new IntervalCursor());
+            intervalCursors.put(5, new IntervalCursor());
+            intervalCursors.put(18, new IntervalCursor());
         }
 
         void accept(AisMessage msg) {
@@ -191,12 +180,48 @@ public class StreamingVesselStatistics {
                 shipLength = msg.shipLength;
             }
 
-            if (current != null) {
-                processInterval(current, msg, previous);
+            if (isDynamicMessage(msg)
+                    && msg.lat != null
+                    && msg.lon != null) {
+
+                latestLat = msg.lat;
+                latestLon = msg.lon;
             }
 
-            previous = current;
-            current = msg;
+            int targetType =
+                    AisAnalysisRules.getAnalysisType(
+                            msg.messageType);
+
+            if (targetType < 0) {
+                return;
+            }
+
+            IntervalCursor cursor =
+                    intervalCursors.get(targetType);
+
+            double expectedDelta =
+                    cursor.reportRateTracker.accept(msg);
+
+            Double distance =
+                    getDistance(
+                            targetType,
+                            msg,
+                            latestLat,
+                            latestLon);
+
+            if (cursor.current != null) {
+                processInterval(
+                        targetType,
+                        cursor.current,
+                        msg,
+                        cursor.currentExpectedDelta,
+                        cursor.currentDistance,
+                        distance);
+            }
+
+            cursor.current = msg;
+            cursor.currentExpectedDelta = expectedDelta;
+            cursor.currentDistance = distance;
         }
 
         TypeState getTypeState(int targetType) {
@@ -211,37 +236,15 @@ public class StreamingVesselStatistics {
         }
 
         private void processInterval(
+                int targetType,
                 AisMessage currentMsg,
                 AisMessage nextMsg,
-                AisMessage previousMsg) {
-
-            if (isDynamicMessage(currentMsg)
-                    && currentMsg.lat != null
-                    && currentMsg.lon != null) {
-
-                latestLat = currentMsg.lat;
-                latestLon = currentMsg.lon;
-            }
-
-            if (!isAnalyzedType(currentMsg.messageType)) {
-                return;
-            }
-
-            int targetType =
-                    currentMsg.messageType;
+                double expectedDelta,
+                Double currentDistance,
+                Double nextDistance) {
 
             TypeState typeState =
                     typeStates.get(targetType);
-
-            TypeState dailyTypeState =
-                    getOrCreateDailyTypeState(
-                            targetType,
-                            currentMsg.timestamp.toLocalDate());
-
-            double expectedDelta =
-                    ReportRateTable.getExpectedInterval(
-                            currentMsg,
-                            previousMsg);
 
             if (expectedDelta <= 0) {
                 return;
@@ -253,26 +256,16 @@ public class StreamingVesselStatistics {
                             nextMsg.timestamp)
                             .toMillis() / 1000.0;
 
-            long actualDelta =
-                    Math.round(actualDeltaRaw);
-
-            if (actualDelta > MAX_INTERVAL_SECONDS) {
+            if (actualDeltaRaw < 0) {
                 return;
             }
 
-            Double currentDistance =
-                    getDistance(
-                            targetType,
-                            currentMsg,
-                            latestLat,
-                            latestLon);
+            if (actualDeltaRaw
+                    >= AisAnalysisRules
+                            .getTrackGapThresholdSeconds(targetType)) {
 
-            Double nextDistance =
-                    getDistance(
-                            targetType,
-                            nextMsg,
-                            latestLat,
-                            latestLon);
+                return;
+            }
 
             if (currentDistance != null
                     && nextDistance != null
@@ -282,29 +275,18 @@ public class StreamingVesselStatistics {
                 return;
             }
 
-            double estimatedLoss;
-
-            if (targetType == 5) {
-
-                estimatedLoss =
-                        (actualDelta / expectedDelta) - 1;
-
-            } else {
-
-                estimatedLoss =
-                        Math.round(
-                                (double) actualDelta
-                                        / expectedDelta) - 1;
-            }
-
-            if (estimatedLoss < 0) {
-                estimatedLoss = 0;
-            }
+            TypeState dailyTypeState =
+                    getOrCreateDailyTypeState(
+                            targetType,
+                            currentMsg.timestamp.toLocalDate());
 
             long lossCount =
-                    Math.max(
-                            0,
-                            (long) Math.ceil(estimatedLoss));
+                    LossEstimator.estimateMissingMessages(
+                            actualDeltaRaw,
+                            expectedDelta);
+
+            long actualDelta =
+                    Math.round(actualDeltaRaw);
 
             addInterval(
                     typeState,
@@ -425,6 +407,18 @@ public class StreamingVesselStatistics {
 
             return result;
         }
+    }
+
+    private static class IntervalCursor {
+
+        AisMessage current;
+
+        double currentExpectedDelta;
+
+        Double currentDistance;
+
+        final ReportRateTracker reportRateTracker =
+                new ReportRateTracker();
     }
 
     private static Double getDistance(

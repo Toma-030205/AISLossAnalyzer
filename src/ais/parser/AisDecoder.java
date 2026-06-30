@@ -231,11 +231,15 @@ public class AisDecoder {
                                 bits.substring(38, 42),
                                 2);
 
-                msg.sog =
+                int sogRaw =
                         Integer.parseInt(
                                 bits.substring(50, 60),
-                                2)
-                                / 10.0;
+                                2);
+
+                msg.sog =
+                        sogRaw == 1023
+                                ? null
+                                : sogRaw / 10.0;
 
                 msg.lon =
                         twosComp(
@@ -247,17 +251,25 @@ public class AisDecoder {
                                 bits.substring(89, 116))
                                 / 600000.0;
 
-                msg.cog =
+                int cogRaw =
                         Integer.parseInt(
                                 bits.substring(116, 128),
-                                2)
-                                / 10.0;
+                                2);
 
-                msg.trueHeading =
-                        (double)
+                msg.cog =
+                        cogRaw >= 3600
+                                ? null
+                                : cogRaw / 10.0;
+
+                int headingRaw =
                         Integer.parseInt(
                                 bits.substring(128, 137),
                                 2);
+
+                msg.trueHeading =
+                        headingRaw >= 360
+                                ? null
+                                : (double) headingRaw;
             }
         }
 
@@ -268,11 +280,15 @@ public class AisDecoder {
 
             if (bits.length() >= 133) {
 
-                msg.sog =
+                int sogRaw =
                         Integer.parseInt(
                                 bits.substring(46, 56),
-                                2)
-                                / 10.0;
+                                2);
+
+                msg.sog =
+                        sogRaw == 1023
+                                ? null
+                                : sogRaw / 10.0;
 
                 msg.lon =
                         twosComp(
@@ -284,17 +300,32 @@ public class AisDecoder {
                                 bits.substring(85, 112))
                                 / 600000.0;
 
-                msg.cog =
+                int cogRaw =
                         Integer.parseInt(
                                 bits.substring(112, 124),
-                                2)
-                                / 10.0;
+                                2);
 
-                msg.trueHeading =
-                        (double)
+                msg.cog =
+                        cogRaw >= 3600
+                                ? null
+                                : cogRaw / 10.0;
+
+                int headingRaw =
                         Integer.parseInt(
                                 bits.substring(124, 133),
                                 2);
+
+                msg.trueHeading =
+                        headingRaw >= 360
+                                ? null
+                                : (double) headingRaw;
+
+                if (bits.length() >= 147) {
+                    msg.classBCsUnit =
+                            bits.charAt(141) == '1';
+                    msg.assignedMode =
+                            bits.charAt(146) == '1';
+                }
             }
         }
 

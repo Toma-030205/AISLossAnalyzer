@@ -2,7 +2,7 @@
 
 AISメッセージの受信欠落を推定し、船舶ごと・距離帯ごと・曜日ごとに `OBSERVED` と `EXPECTED` を集計するための解析プログラムです。
 
-現時点では大阪湾周辺の固定受信点を前提に、AISの Type 1 / Type 5 / Type 18 を対象として集計します。将来的には、通信欠落の傾向をもとにシミュレーターへ発展させる想定です。
+現時点では大阪湾周辺の固定受信点を前提に、AISの Type 1/2/3 / Type 5 / Type 18 を対象として集計します。Type 1/2/3はClass A位置報告としてType 1の出力に集約します。将来的には、通信欠落の傾向をもとにシミュレーターへ発展させる想定です。
 
 ## 目的
 
@@ -10,7 +10,7 @@ AISメッセージの受信欠落を推定し、船舶ごと・距離帯ごと�
 
 主な出力は次の値です。
 
-- `OBSERVED`: 実際に観測されたメッセージ数
+- `OBSERVED`: 解析条件を満たした受信区間（区間始点メッセージ）の数
 - `EXPECTED`: 観測数と推定欠落数を足した想定メッセージ数
 - `LOSS`: 推定欠落数
 - `LOSS_RATE`: `LOSS / EXPECTED * 100`
@@ -32,7 +32,7 @@ C:/Users/Owner/AISData
 
 対象メッセージタイプは以下です。
 
-- Type 1: Class A position report
+- Type 1/2/3: Class A position report（Type 1として集計）
 - Type 5: Static and voyage related data
 - Type 18: Class B position report
 
@@ -44,30 +44,60 @@ C:/Users/Owner/AISData
 
 ## 欠落推定の考え方
 
-`ReportRateTable` でメッセージタイプ、速力、旋回状態、航行状態などから期待送信間隔を求めます。
+`ReportRateTable` でメッセージタイプ、速力、旋回状態、航行状態、Class BのSO/CS方式から期待送信間隔を求めます。
 
-実際の次メッセージまでの時間を `actualDelta`、期待送信間隔を `expectedDelta` として、概ね以下のように欠落数を推定します。
+同じ船舶から受信した、同じ解析カテゴリの次メッセージまでの時間を `actualDelta`、期待送信間隔を `expectedDelta` として、概ね以下のように欠落数を推定します。
+
+- Type 1: 次のType 1/2/3まで
+- Type 5: 次のType 5まで
+- Type 18: 次のType 18まで
+
+すべてのメッセージタイプで、ミリ秒精度の実測時間を丸めずに次の共通式へ渡します。
 
 ```text
-LOSS ~= actualDelta / expectedDelta - 1
+estimatedTransmissions = round(actualDelta / expectedDelta)
+LOSS = max(0, estimatedTransmissions - 1)
 ```
 
-Type 1 / Type 18 は丸め処理を使い、Type 5 は長い送信間隔を前提に別扱いしています。
+例えばType 5の期待間隔360秒に対して361秒ならLOSSは0、540秒以上ならLOSSは1です。
+
+### 期待送信間隔
+
+- Type 1/2/3: 航行状態とSOGにより2～180秒。旋回中は2秒または10/3秒
+- Type 5: 360秒
+- Type 18 Class B SO: SOGと旋回状態により5～180秒
+- Type 18 Class B CS: 2kt以下は180秒、2kt超は既定で30秒
+
+旋回状態は、受信AISから再現できる近似として、現在方位と過去30秒の受信方位平均との差が5度を超えた場合に開始し、5度以下の状態が20秒を超えて続くまで維持します。真方位（HDG）を優先し、利用できない場合のみ2kt超でCOGを使用します。
+
+Class B CSは規格世代差があります。既定値は実データとITU-R M.1371-5に合わせて高速時も30秒です。M.1371-6の14kt超15秒を評価する場合は、次のように変更できます。
+
+```powershell
+java -Dais.classBCsHighSpeedIntervalSeconds=15 -cp ..\bin ais.main.Main
+```
 
 ## 外れ値除外
 
 現在は、長時間ギャップや明らかな位置飛びが全体傾向を歪めないように、以下の区間を除外します。
 
 - 現在メッセージ距離と次メッセージ距離の差が `30km` を超える区間
-- 現在メッセージから次メッセージまでの時間が `3600秒` を超える区間
+- 実測間隔が「メッセージ種別の最大正常送信間隔 × 10」以上の区間
 
-時間しきい値はJavaのシステムプロパティで変更できます。
+10倍以上の区間は通信欠落として加算せず、「航跡または観測セッションが途切れた区間」として扱います。現在のしきい値は以下のとおりです。
+
+| 解析カテゴリ | 最大正常送信間隔 | 航跡切断のしきい値 |
+| --- | ---: | ---: |
+| Type 1/2/3 | 180秒 | 1800秒（30分） |
+| Type 5 | 360秒 | 3600秒（1時間） |
+| Type 18 | 180秒 | 1800秒（30分） |
+
+倍率はJavaのシステムプロパティで変更できます。
 
 ```powershell
-java -Dais.maxIntervalSeconds=1800 -cp ..\bin ais.main.Main
+java -Dais.trackGapMultiplier=5 -cp ..\bin ais.main.Main
 ```
 
-上の例では、30分を超える区間を除外します。
+上の例では最大正常送信間隔の5倍以上を航跡切断として扱います。
 
 ## ビルド
 
@@ -75,6 +105,20 @@ PowerShellでリポジトリ直下から実行します。
 
 ```powershell
 javac -d bin (Get-ChildItem -Recurse src -Filter *.java | ForEach-Object { $_.FullName })
+```
+
+## テスト
+
+製品ソースとテストを `test-bin` にコンパイルして実行します。
+
+```powershell
+$sources = @(
+    Get-ChildItem -Recurse src,test -Filter *.java |
+        ForEach-Object { $_.FullName }
+)
+javac -d test-bin $sources
+java -cp test-bin ais.logic.AisCoreCalculationTest
+java -cp test-bin ais.stats.AisStatisticsTest
 ```
 
 ## 実行
@@ -135,6 +179,15 @@ src/ais/parser/
 src/ais/logic/ReportRateTable.java
   AISの期待送信間隔を返すテーブル。
 
+src/ais/logic/ReportRateTracker.java
+  過去30秒の方位から旋回状態を管理する。
+
+src/ais/logic/LossEstimator.java
+  全メッセージタイプ共通の欠落数計算。
+
+src/ais/logic/AisAnalysisRules.java
+  解析カテゴリと航跡切断の10倍ルールを管理する。
+
 src/ais/stats/StreamingVesselStatistics.java
   ストリーミング形式で船舶ごとの欠落統計を集計する中心処理。
 
@@ -149,5 +202,7 @@ src/plot_weekday_observed_expected.py
 
 - 入力ディレクトリはコード内に固定されています。
 - 出力CSVの保存場所は実行時のカレントディレクトリに依存します。
+- Message 16/23による個別の割当送信間隔は追跡していないため、割当モードの区間では自律モードの期待間隔を使用します。
+- Class B SOの回線混雑による変更送信間隔は受信データだけでは確定できないため、通常送信間隔を使用します。
 - コンソール表示の一部コメントや日本語文字列は文字化けしている箇所があります。
 - 現在の解析は欠落傾向の把握が中心で、シミュレーション機能はまだ未実装です。

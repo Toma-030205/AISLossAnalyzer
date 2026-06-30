@@ -4,68 +4,67 @@ import ais.model.AisMessage;
 import ais.model.Vessel;
 
 import java.time.Duration;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 public class GapAnalyzer {
 
     public void analyze(Vessel vessel) {
 
-        List<AisMessage> messages =
-                vessel.getMessages();
+        Map<Integer, AisMessage> currentByType =
+                new HashMap<>();
 
-        if (messages.size() < 2) {
-            return;
-        }
+        Map<Integer, Double> expectedByType =
+                new HashMap<>();
 
-        for (int i = 0;
-             i < messages.size() - 1;
-             i++) {
+        Map<Integer, ReportRateTracker> trackers =
+                new HashMap<>();
 
-            AisMessage current =
-                    messages.get(i);
+        trackers.put(1, new ReportRateTracker());
+        trackers.put(5, new ReportRateTracker());
+        trackers.put(18, new ReportRateTracker());
 
-            AisMessage next =
-                    messages.get(i + 1);
+        for (AisMessage message : vessel.getMessages()) {
 
-            double actualDeltaRaw =
-                    Duration.between(
-                        current.timestamp,
-                        next.timestamp
-                    ).toMillis() / 1000.0;
+            int analysisType =
+                    AisAnalysisRules.getAnalysisType(
+                            message.messageType);
 
-            long actualDelta =
-                    Math.round(actualDeltaRaw);
-
-            double expectedDelta =
-                    ReportRateTable
-                            .getExpectedInterval(
-                                    current,
-                                    i > 0 ? messages.get(i - 1) : null);
-
-            if (expectedDelta <= 0) {
+            if (analysisType < 0) {
                 continue;
             }
 
-            // 欠落推定回数
-            long estimatedLoss =
-                    Math.round(
-                                (double) actualDelta
-                                    / expectedDelta
-                    ) - 1;
+            double nextExpected =
+                    trackers.get(analysisType).accept(message);
 
-            // debug output
-            /*
-            System.out.println(
-                    "MMSI="
-                            + vessel.getMmsi()
-                            + " EXPECTED="
-                            + expectedDelta
-                            + " ACTUAL="
-                            + actualDelta
-                            + " LOSS_EST="
-                            + estimatedLoss
-            );
-            */
+            AisMessage current =
+                    currentByType.get(analysisType);
+
+            if (current != null) {
+
+                double actualSeconds =
+                        Duration.between(
+                                current.timestamp,
+                                message.timestamp)
+                                .toMillis() / 1000.0;
+
+                double expectedSeconds =
+                        expectedByType.get(analysisType);
+
+                if (actualSeconds >= 0
+                        && actualSeconds
+                        < AisAnalysisRules
+                                .getTrackGapThresholdSeconds(
+                                        analysisType)) {
+
+                    LossEstimator.estimateMissingMessages(
+                            actualSeconds,
+                            expectedSeconds);
+                }
+            }
+
+            currentByType.put(analysisType, message);
+            expectedByType.put(analysisType, nextExpected);
         }
     }
 }

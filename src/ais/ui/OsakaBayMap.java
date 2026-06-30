@@ -23,6 +23,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
 
 public final class OsakaBayMap {
+    private static final double MAP_WIDTH_RATIO = 2.0 / 3.0;
     private static final List<Path> DEFAULT_FILES = List.of(
             Path.of("C:/Users/Owner/senc/JP34NC8Q.senc"),
             Path.of("C:/Users/Owner/senc/JP34NC8S.senc"),
@@ -47,7 +48,7 @@ public final class OsakaBayMap {
     }
 
     private static void showWindow(MapPanel mapPanel) {
-        JFrame frame = new JFrame("Osaka Bay Mercator Map");
+        JFrame frame = new JFrame("Osaka Bay Map");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         frame.add(mapPanel, BorderLayout.CENTER);
         frame.pack();
@@ -69,7 +70,9 @@ public final class OsakaBayMap {
             super.paintComponent(g);
             Graphics2D graphics = (Graphics2D) g.create();
             try {
-                MercatorProjector projector = MercatorProjector.from(features, getWidth(), getHeight(), 28.0);
+                int mapWidth = Math.max(1, (int) Math.round(getWidth() * MAP_WIDTH_RATIO));
+                MeridionalPartsProjector projector =
+                        MeridionalPartsProjector.from(features, mapWidth, getHeight(), 28.0);
                 MapRenderer.render(graphics, getWidth(), getHeight(), features, projector);
             } finally {
                 graphics.dispose();
@@ -163,7 +166,12 @@ public final class OsakaBayMap {
         }
     }
 
-    private static final class MercatorProjector {
+    /** WGS-84 ellipsoidal Mercator projection using meridional parts. */
+    private static final class MeridionalPartsProjector {
+        private static final double WGS84_FLATTENING = 1.0 / 298.257223563;
+        private static final double WGS84_ECCENTRICITY =
+                Math.sqrt(WGS84_FLATTENING * (2.0 - WGS84_FLATTENING));
+
         private final double minX;
         private final double maxY;
         private final double scale;
@@ -171,7 +179,8 @@ public final class OsakaBayMap {
         private final double offsetX;
         private final double offsetY;
 
-        private MercatorProjector(double minX, double maxY, double scale, double margin, double offsetX, double offsetY) {
+        private MeridionalPartsProjector(
+                double minX, double maxY, double scale, double margin, double offsetX, double offsetY) {
             this.minX = minX;
             this.maxY = maxY;
             this.scale = scale;
@@ -180,7 +189,7 @@ public final class OsakaBayMap {
             this.offsetY = offsetY;
         }
 
-        static MercatorProjector from(List<Feature> features, int width, int height, double margin) {
+        static MeridionalPartsProjector from(List<Feature> features, int width, int height, double margin) {
             List<Feature> boundsFeatures = features.stream()
                     .filter(feature -> feature.isLandArea() || feature.isCoastline() || feature.isRiver())
                     .toList();
@@ -195,8 +204,8 @@ public final class OsakaBayMap {
 
             for (Feature feature : boundsFeatures) {
                 for (GeoPoint point : feature.points()) {
-                    double x = mercatorX(point.lon());
-                    double y = mercatorY(point.lat());
+                    double x = longitudeMinutes(point.lon());
+                    double y = meridionalParts(point.lat());
                     minX = Math.min(minX, x);
                     maxX = Math.max(maxX, x);
                     minY = Math.min(minY, y);
@@ -209,24 +218,30 @@ public final class OsakaBayMap {
             double scale = Math.min(scaleX, scaleY);
             double mapWidth = (maxX - minX) * scale;
             double mapHeight = (maxY - minY) * scale;
-            double offsetX = (width - margin * 2.0 - mapWidth) / 2.0;
+            // Keep the chart against the left side. The unused right third of the
+            // panel is reserved for future simulator controls.
+            double offsetX = 0.0;
             double offsetY = (height - margin * 2.0 - mapHeight) / 2.0;
-            return new MercatorProjector(minX, maxY, scale, margin, offsetX, offsetY);
+            return new MeridionalPartsProjector(minX, maxY, scale, margin, offsetX, offsetY);
         }
 
         ScreenPoint toScreen(GeoPoint point) {
-            double x = margin + offsetX + (mercatorX(point.lon()) - minX) * scale;
-            double y = margin + offsetY + (maxY - mercatorY(point.lat())) * scale;
+            double x = margin + offsetX + (longitudeMinutes(point.lon()) - minX) * scale;
+            double y = margin + offsetY + (maxY - meridionalParts(point.lat())) * scale;
             return new ScreenPoint(x, y);
         }
 
-        private static double mercatorX(double lon) {
-            return Math.toRadians(lon);
+        private static double longitudeMinutes(double lon) {
+            return lon * 60.0;
         }
 
-        private static double mercatorY(double lat) {
+        private static double meridionalParts(double lat) {
             double radians = Math.toRadians(lat);
-            return Math.log(Math.tan(Math.PI / 4.0 + radians / 2.0));
+            double eccentricitySinLat = WGS84_ECCENTRICITY * Math.sin(radians);
+            double sphericalTerm = Math.log(Math.tan(Math.PI / 4.0 + radians / 2.0));
+            double ellipsoidCorrection = WGS84_ECCENTRICITY / 2.0
+                    * Math.log((1.0 + eccentricitySinLat) / (1.0 - eccentricitySinLat));
+            return Math.toDegrees(sphericalTerm - ellipsoidCorrection) * 60.0;
         }
     }
 
@@ -237,7 +252,12 @@ public final class OsakaBayMap {
         private static final Color COAST = new Color(35, 64, 74);
         private static final Color RIVER = new Color(92, 151, 178, 180);
 
-        static void render(Graphics2D g, int width, int height, List<Feature> features, MercatorProjector projector) {
+        static void render(
+                Graphics2D g,
+                int width,
+                int height,
+                List<Feature> features,
+                MeridionalPartsProjector projector) {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
             g.setColor(SEA);
@@ -270,10 +290,10 @@ public final class OsakaBayMap {
                 }
             }
 
-            drawFrame(g, width, height);
+            drawBorder(g, width, height);
         }
 
-        private static Path2D toPath(Feature feature, MercatorProjector projector) {
+        private static Path2D toPath(Feature feature, MeridionalPartsProjector projector) {
             Path2D path = new Path2D.Double();
             boolean first = true;
             for (GeoPoint point : feature.points()) {
@@ -291,11 +311,7 @@ public final class OsakaBayMap {
             return path;
         }
 
-        private static void drawFrame(Graphics2D g, int width, int height) {
-            g.setColor(new Color(255, 255, 255, 170));
-            g.fillRoundRect(18, 18, 250, 38, 8, 8);
-            g.setColor(new Color(42, 52, 56));
-            g.drawString("Osaka Bay coastlines - Mercator", 32, 42);
+        private static void drawBorder(Graphics2D g, int width, int height) {
             g.setColor(new Color(42, 52, 56, 120));
             g.drawRect(0, 0, width - 1, height - 1);
         }

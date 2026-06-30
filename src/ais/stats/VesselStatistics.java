@@ -1,7 +1,9 @@
 package ais.stats;
 
+import ais.logic.AisAnalysisRules;
 import ais.logic.DistanceCalculator;
-import ais.logic.ReportRateTable;
+import ais.logic.LossEstimator;
+import ais.logic.ReportRateTracker;
 import ais.model.AisMessage;
 import ais.model.Vessel;
 
@@ -19,11 +21,6 @@ public class VesselStatistics {
     private static final double MAX_DISTANCE_JUMP_KM =
             30.0;
 
-    private static final long MAX_INTERVAL_SECONDS =
-            Long.getLong(
-                    "ais.maxIntervalSeconds",
-                    3600L);
-
     public VesselStatisticsResult analyze(
             Vessel vessel,
             int targetType) {
@@ -32,228 +29,163 @@ public class VesselStatistics {
                 new VesselStatisticsResult();
 
         result.mmsi = vessel.getMmsi();
-
-        result.shipLength =
-                vessel.getShipLength();
+        result.shipLength = vessel.getShipLength();
 
         List<AisMessage> messages =
                 vessel.getMessages();
 
         long totalLoss = 0;
-
         long maxDelta = 0;
-
         double deltaSum = 0;
-
         int deltaCount = 0;
-
         double maxDistance = 0;
-
         int validMessageCount = 0;
+
         Double latestLat = null;
         Double latestLon = null;
 
-        // =====================================
-        // メイン解析
-        // =====================================
+        AisMessage current = null;
+        double currentExpectedDelta = -1.0;
+        Double currentDistance = null;
 
-        for (int i = 0;
-             i < messages.size() - 1;
-             i++) {
+        ReportRateTracker reportRateTracker =
+                new ReportRateTracker();
 
-            AisMessage current =
-                    messages.get(i);
+        for (AisMessage message : messages) {
 
-            AisMessage next =
-                    messages.get(i + 1);
-                if ((current.messageType == 1|| current.messageType == 2|| current.messageType == 3
-                        || current.messageType == 18)
+            if (isDynamicMessage(message)
+                    && message.lat != null
+                    && message.lon != null) {
 
-                        && current.lat != null
-                        && current.lon != null) {
+                latestLat = message.lat;
+                latestLon = message.lon;
+            }
 
-                        latestLat =current.lat;
+            if (!AisAnalysisRules.belongsToAnalysisType(
+                    message.messageType,
+                    targetType)) {
 
-                        latestLon =current.lon;
-                }
-
-            // =====================================
-            // 対象Typeのみ解析
-            // =====================================
-
-            if (current.messageType != targetType) {
                 continue;
             }
-
-            // =====================================
-            // 実際間隔
-            // =====================================
-
-            double actualDeltaRaw =
-                    Duration.between(
-                            current.timestamp,
-                            next.timestamp
-                    ).toMillis() / 1000.0;
-
-            long actualDelta =
-                    Math.round(actualDeltaRaw);
-
-            if (actualDelta > MAX_INTERVAL_SECONDS) {
-                continue;
-            }
-
-            // =====================================
-            // 想定間隔
-            // =====================================
-
-            AisMessage prev = null;
-
-            if (i > 0) {
-                prev = messages.get(i - 1);
-            }
-
-            double expectedDelta =
-                    ReportRateTable
-                            .getExpectedInterval(
-                                    current,
-                                    prev);
-
-            if (expectedDelta <= 0) {
-                continue;
-            }
-
-            Double currentDistance =
-                    getDistance(
-                            targetType,
-                            current,
-                            latestLat,
-                            latestLon);
 
             Double nextDistance =
                     getDistance(
                             targetType,
-                            next,
+                            message,
                             latestLat,
                             latestLon);
 
-            if (currentDistance != null
-                    && nextDistance != null
-                    && Math.abs(currentDistance - nextDistance)
-                    > MAX_DISTANCE_JUMP_KM) {
+            double nextExpectedDelta =
+                    reportRateTracker.accept(message);
 
+            if (current == null) {
+                current = message;
+                currentExpectedDelta = nextExpectedDelta;
+                currentDistance = nextDistance;
                 continue;
             }
 
-            validMessageCount++;
+            double actualDeltaRaw =
+                    Duration.between(
+                            current.timestamp,
+                            message.timestamp)
+                            .toMillis() / 1000.0;
 
-        // =====================================
-        // 欠落推定
-        // =====================================
+            boolean validInterval =
+                    currentExpectedDelta > 0
+                            && actualDeltaRaw >= 0
+                            && actualDeltaRaw
+                            < AisAnalysisRules
+                                    .getTrackGapThresholdSeconds(
+                                            targetType)
+                            && !isDistanceJump(
+                                    currentDistance,
+                                    nextDistance);
 
-        double estimatedLoss;
+            if (validInterval) {
 
-        if (targetType == 5) {
+                long lossCount =
+                        LossEstimator.estimateMissingMessages(
+                                actualDeltaRaw,
+                                currentExpectedDelta);
 
-                estimatedLoss =
-                (actualDelta / expectedDelta)
-                    - 1;
+                long actualDelta =
+                        Math.round(actualDeltaRaw);
 
-        } else {
+                validMessageCount++;
+                totalLoss += lossCount;
 
-                estimatedLoss =
-                Math.round(
-                    (double) actualDelta
-                            / expectedDelta
-                ) - 1;
-        }
+                if (actualDelta > maxDelta) {
+                    maxDelta = actualDelta;
+                }
 
-        // マイナスは0扱い
-        if (estimatedLoss < 0) {
-        estimatedLoss = 0;
-        }
+                deltaSum += actualDelta;
+                deltaCount++;
 
-        // 欠落なしは除外
-        long lossCount =
-                Math.max(
-                        0,
-                        (long) Math.ceil(estimatedLoss));
+                if (currentDistance != null) {
 
-        totalLoss += lossCount;
+                    result.addDistanceBin(
+                            currentDistance,
+                            lossCount);
 
-            // =====================================
-            // 最大間隔
-            // =====================================
+                    if (lossCount > 0) {
 
-            if (actualDelta > maxDelta) {
-                maxDelta = actualDelta;
-            }
+                        result.lossDistances.add(
+                                currentDistance);
 
-            // =====================================
-            // 平均間隔
-            // =====================================
+                        result.lossCounts.add(lossCount);
 
-            deltaSum += actualDelta;
-
-            deltaCount++;
-
-            // =====================================
-            // 距離計算
-            // =====================================
-
-            if (currentDistance != null) {
-
-                result.addDistanceBin(
-                        currentDistance,
-                        lossCount);
-
-                if (lossCount > 0) {
-
-                    result.lossDistances.add(currentDistance);
-
-                    result.lossCounts.add(lossCount);
-
-                    if (currentDistance > maxDistance) {
-                            maxDistance =currentDistance;
+                        if (currentDistance > maxDistance) {
+                            maxDistance = currentDistance;
+                        }
                     }
                 }
+            }
+
+            current = message;
+            currentExpectedDelta = nextExpectedDelta;
+            currentDistance = nextDistance;
         }
-}
 
-        // =====================================
-        // 結果格納
-        // =====================================
-
-        result.totalMessages =
-                validMessageCount;
-
-        result.totalEstimatedLoss =
-                totalLoss;
-
-        result.maxDelta =
-                maxDelta;
+        result.totalMessages = validMessageCount;
+        result.totalEstimatedLoss = totalLoss;
+        result.maxDelta = maxDelta;
 
         if (deltaCount > 0) {
-
             result.averageDelta =
                     deltaSum / deltaCount;
         }
 
-        result.maxDistance =
-                maxDistance;
+        result.maxDistance = maxDistance;
 
         double denominator =
-                validMessageCount
-                        + totalLoss;
+                validMessageCount + totalLoss;
 
         if (denominator > 0) {
-
             result.lossRate =
-                    ((double) totalLoss
-                            / denominator)
+                    ((double) totalLoss / denominator)
                             * 100.0;
         }
 
         return result;
+    }
+
+    private static boolean isDynamicMessage(AisMessage msg) {
+
+        return msg.messageType == 1
+                || msg.messageType == 2
+                || msg.messageType == 3
+                || msg.messageType == 18;
+    }
+
+    private static boolean isDistanceJump(
+            Double currentDistance,
+            Double nextDistance) {
+
+        return currentDistance != null
+                && nextDistance != null
+                && Math.abs(currentDistance - nextDistance)
+                > MAX_DISTANCE_JUMP_KM;
     }
 
     private static Double getDistance(
@@ -265,7 +197,8 @@ public class VesselStatistics {
         Double lat = null;
         Double lon = null;
 
-        if ((targetType == 1 || targetType == 18)
+        if ((targetType == AisAnalysisRules.CLASS_A_POSITION
+                || targetType == AisAnalysisRules.CLASS_B_POSITION)
                 && msg.lat != null
                 && msg.lon != null) {
 
@@ -273,17 +206,12 @@ public class VesselStatistics {
             lon = msg.lon;
         }
 
-        if (targetType == 5) {
+        if (targetType == AisAnalysisRules.STATIC_VOYAGE) {
 
-            if (msg.lat != null
-                    && msg.lon != null) {
-
+            if (msg.lat != null && msg.lon != null) {
                 lat = msg.lat;
                 lon = msg.lon;
-
-            } else if (latestLat != null
-                    && latestLon != null) {
-
+            } else if (latestLat != null && latestLon != null) {
                 lat = latestLat;
                 lon = latestLon;
             }
