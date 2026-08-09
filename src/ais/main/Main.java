@@ -1,6 +1,7 @@
 package ais.main;
 
 import ais.parser.FileLoader;
+import ais.parser.FileLoadStatistics;
 import ais.stats.DailyStatisticsResult;
 import ais.stats.DistanceBinStatistics;
 import ais.stats.StreamingVesselStatistics;
@@ -10,16 +11,39 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.io.File;
 import java.io.PrintWriter;
 import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class Main {
 
     public static void main(String[] args) {
 
-        String dataDirPath =
-                "C:/Users/Owner/AISData";
+        Path dataDir =
+                args.length >= 1
+                        ? Path.of(args[0])
+                        : Path.of(
+                                "C:/Users/Owner/AISData");
+
+        Path outputDir =
+                args.length >= 2
+                        ? Path.of(args[1])
+                        : Path.of(".");
+
+        try {
+            Files.createDirectories(outputDir);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Could not create output directory: "
+                            + outputDir,
+                    e);
+        }
 
         FileLoader loader =
                 new FileLoader();
@@ -31,16 +55,16 @@ public class Main {
                 0;
 
         File[] dataFiles =
-                new File(dataDirPath)
+                dataDir
+                        .toFile()
                         .listFiles((dir, name) ->
-                                name.toLowerCase()
-                                        .endsWith(".ais"));
+                                isSupportedInputFile(name));
 
         if (dataFiles == null || dataFiles.length == 0) {
 
             System.out.println(
                     "AIS files not found: "
-                            + dataDirPath);
+                            + dataDir);
 
             return;
         }
@@ -49,6 +73,11 @@ public class Main {
                 dataFiles,
                 Comparator.comparing(
                         File::getName));
+
+        dataFiles = removeCompressedCounterpartDuplicates(dataFiles);
+
+        List<String> inputFileSummaryRows =
+                new ArrayList<>();
 
         for (File dataFile : dataFiles) {
 
@@ -59,7 +88,8 @@ public class Main {
             final long[] fileMessageCount =
                     {0};
 
-            loader.loadFile(
+            FileLoadStatistics loadStatistics =
+                    loader.loadFileWithStatistics(
                     dataFile.getAbsolutePath(),
                     msg -> {
 
@@ -69,6 +99,19 @@ public class Main {
 
             totalMessages +=
                     fileMessageCount[0];
+
+            inputFileSummaryRows.add(
+                    dataFile.getName()
+                            + ","
+                            + dataFile.length()
+                            + ","
+                            + loadStatistics.totalRows
+                            + ","
+                            + loadStatistics.exactDuplicateRows
+                            + ","
+                            + loadStatistics.targetMessages
+                            + ","
+                            + loadStatistics.invalidOrNonTargetRows);
         }
 
         System.out.println(
@@ -132,28 +175,104 @@ public class Main {
         // =====================================
 
         exportCsv(
-                "type1_distance_loss.csv",
+                outputDir.resolve(
+                        "type1_distance_loss.csv"),
                 type1Results);
 
         exportCsv(
-                "type5_distance_loss.csv",
+                outputDir.resolve(
+                        "type5_distance_loss.csv"),
                 type5Results);
 
         exportCsv(
-                "type18_distance_loss.csv",
+                outputDir.resolve(
+                        "type18_distance_loss.csv"),
                 type18Results);
 
         exportDailyCsv(
-                "type1_daily_distance_loss.csv",
+                outputDir.resolve(
+                        "type1_daily_distance_loss.csv"),
                 statistics.getDailyResults(1));
 
         exportDailyCsv(
-                "type5_daily_distance_loss.csv",
+                outputDir.resolve(
+                        "type5_daily_distance_loss.csv"),
                 statistics.getDailyResults(5));
 
         exportDailyCsv(
-                "type18_daily_distance_loss.csv",
+                outputDir.resolve(
+                        "type18_daily_distance_loss.csv"),
                 statistics.getDailyResults(18));
+
+        exportInputFileSummary(
+                outputDir.resolve("input_file_summary.csv"),
+                inputFileSummaryRows);
+    }
+
+    private static File[] removeCompressedCounterpartDuplicates(
+            File[] files) {
+
+        Set<String> names =
+                new HashSet<>();
+
+        for (File file : files) {
+            names.add(file.getName().toLowerCase(Locale.ROOT));
+        }
+
+        List<File> filtered =
+                new ArrayList<>();
+
+        for (File file : files) {
+
+            String lower =
+                    file.getName().toLowerCase(Locale.ROOT);
+
+            boolean uncompressed =
+                    lower.endsWith(".ais")
+                            || lower.endsWith(".csv");
+
+            if (uncompressed && names.contains(lower + ".gz")) {
+                System.out.println(
+                        "Skipping compressed-counterpart duplicate: "
+                                + file.getName());
+                continue;
+            }
+
+            filtered.add(file);
+        }
+
+        return filtered.toArray(new File[0]);
+    }
+
+    private static boolean isSupportedInputFile(
+            String name) {
+
+        String lower =
+                name.toLowerCase();
+
+        return lower.endsWith(".ais")
+                || lower.endsWith(".ais.gz")
+                || lower.endsWith(".csv")
+                || lower.endsWith(".csv.gz");
+    }
+
+    private static void exportInputFileSummary(
+            Path filePath,
+            List<String> rows) {
+
+        try (PrintWriter writer =
+                     new PrintWriter(filePath.toFile())) {
+
+            writer.println(
+                    "FILE_NAME,FILE_SIZE_BYTES,TOTAL_ROWS,EXACT_DUPLICATE_ROWS,TARGET_MESSAGES,INVALID_OR_NON_TARGET_ROWS");
+
+            for (String row : rows) {
+                writer.println(row);
+            }
+
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
     }
 
     private static void printSummary(
@@ -277,14 +396,14 @@ public class Main {
 }
 
     private static void exportCsv(
-        String fileName,
+        Path filePath,
         List<VesselStatisticsResult> results) {
 
     try {
 
         PrintWriter writer =
                 new PrintWriter(
-                        fileName);
+                        filePath.toFile());
 
         writer.println(
                 "MMSI,DISTANCE_BIN,SHIP_LENGTH,OBSERVED,EXPECTED,LOSS,LOSS_RATE,AVG_DISTANCE");
@@ -335,14 +454,14 @@ public class Main {
 }
 
     private static void exportDailyCsv(
-        String fileName,
+        Path filePath,
         List<DailyStatisticsResult> results) {
 
     try {
 
         PrintWriter writer =
                 new PrintWriter(
-                        fileName);
+                        filePath.toFile());
 
         writer.println(
                 "DATE,DAY_OF_WEEK,MESSAGE_TYPE,MMSI,DISTANCE_BIN,SHIP_LENGTH,OBSERVED,EXPECTED,LOSS,LOSS_RATE,AVG_DISTANCE");
