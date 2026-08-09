@@ -3,17 +3,20 @@ package ais.parser;
 import ais.model.AisMessage;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Consumer;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.zip.GZIPInputStream;
 
 public class FileLoader {
-
-    private static final DateTimeFormatter formatter =
-        DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
 
     public List<AisMessage> loadFile(String filePath) {
 
@@ -31,73 +34,204 @@ public class FileLoader {
             String filePath,
             Consumer<AisMessage> consumer) {
 
-        try (BufferedReader br =
-                     new BufferedReader(
-                             new FileReader(filePath))) {
+        loadFileWithStatistics(filePath, consumer);
+    }
+
+    public FileLoadStatistics loadFileWithStatistics(
+            String filePath,
+            Consumer<AisMessage> consumer) {
+
+        String lowerName =
+                filePath.toLowerCase();
+
+        boolean decodedCsv =
+                lowerName.endsWith(".csv")
+                        || lowerName.endsWith(".csv.gz");
+
+        /* Exact capture duplicates are removed within each input file. */
+        Set<String> rowsSeen =
+                new HashSet<>();
+
+        long totalRows = 0;
+        long exactDuplicateRows = 0;
+        long targetMessages = 0;
+        long invalidOrNonTargetRows = 0;
+
+        try (BufferedReader reader =
+                     openReader(filePath)) {
 
             String line;
 
-            while ((line = br.readLine()) != null) {
+            while ((line = reader.readLine()) != null) {
 
-                String[] parts = line.split(" ", 2);
+                totalRows++;
 
-                if (parts.length < 2) {
+                if (!rowsSeen.add(line)) {
+                    exactDuplicateRows++;
                     continue;
                 }
 
-                String timestamp = parts[0].trim();
-                String nmea = parts[1].trim();
+                if (decodedCsv) {
 
-                AisMessage msg =
+                    AisMessage message =
+                            DecodedCsvParser.decode(line);
+
+                    if (isValidTargetMessage(message)) {
+                        consumer.accept(message);
+                        targetMessages++;
+                    } else {
+                        invalidOrNonTargetRows++;
+                    }
+
+                    continue;
+                }
+
+                int start =
+                        !line.isEmpty() && line.charAt(0) == '\uFEFF'
+                                ? 1
+                                : 0;
+
+                int separator =
+                        line.indexOf(' ', start);
+
+                if (separator < 0) {
+                    invalidOrNonTargetRows++;
+                    continue;
+                }
+
+                String timestamp =
+                        line.substring(start, separator);
+
+                String nmea =
+                        line.substring(separator + 1).trim();
+
+                AisMessage message =
                         AisDecoder.decode(nmea);
 
-                if (msg == null) {
+                if (!isValidTargetMessage(message)) {
+                    invalidOrNonTargetRows++;
                     continue;
                 }
 
-                if (msg.messageType != 1
-                        && msg.messageType != 2
-                        && msg.messageType != 3
-                        && msg.messageType != 5
-                        && msg.messageType != 18) {
-                    continue;
-                }
+                message.timestamp =
+                        parseFixedTimestamp(timestamp);
 
-                // Dynamic AIS(Type1,2,3)だけ座標チェック
-                if (msg.messageType == 1
-                        || msg.messageType == 2
-                        || msg.messageType == 3
-                        || msg.messageType == 18
-                        ) {
-
-                if (msg.lat == null
-                        || msg.lon == null) {
-                    continue;
-                }
-
-                if (msg.lat > 90
-                        || msg.lat < -90) {
-                    continue;
-                }
-
-                if (msg.lon > 180
-                        || msg.lon < -180) {
-                    continue;
-                }
-            }
-
-                msg.timestamp =
-                    LocalDateTime.parse(
-                    timestamp,
-                    formatter
-                );
-
-                consumer.accept(msg);
+                consumer.accept(message);
+                targetMessages++;
             }
 
         } catch (Exception e) {
 
-            e.printStackTrace();
+            throw new IllegalArgumentException(
+                    "Could not load AIS file: "
+                    + filePath,
+                    e);
         }
+
+        return new FileLoadStatistics(
+                totalRows,
+                exactDuplicateRows,
+                targetMessages,
+                invalidOrNonTargetRows);
+    }
+
+    private static LocalDateTime parseFixedTimestamp(
+            String value) {
+
+        if (value.length() != 17) {
+            throw new IllegalArgumentException(
+                    "Unexpected AIS timestamp: " + value);
+        }
+
+        return LocalDateTime.of(
+                digits(value, 0, 4),
+                digits(value, 4, 2),
+                digits(value, 6, 2),
+                digits(value, 8, 2),
+                digits(value, 10, 2),
+                digits(value, 12, 2),
+                digits(value, 14, 3) * 1_000_000);
+    }
+
+    private static int digits(
+            String value,
+            int start,
+            int length) {
+
+        int result = 0;
+        for (int i = start; i < start + length; i++) {
+            char character = value.charAt(i);
+            if (character < '0' || character > '9') {
+                throw new IllegalArgumentException(
+                        "Unexpected AIS timestamp: " + value);
+            }
+            result = result * 10 + character - '0';
+        }
+        return result;
+    }
+
+    private static BufferedReader openReader(
+            String filePath) throws Exception {
+
+        InputStream input =
+                new FileInputStream(
+                        Path.of(filePath).toFile());
+
+        if (filePath
+                .toLowerCase()
+                .endsWith(".gz")) {
+
+            input =
+                    new GZIPInputStream(input);
+        }
+
+        return new BufferedReader(
+                new InputStreamReader(
+                        input,
+                        StandardCharsets.UTF_8));
+    }
+
+    private static boolean isValidTargetMessage(
+            AisMessage message) {
+
+        if (message == null) {
+            return false;
+        }
+
+        if (message.messageType != 1
+                && message.messageType != 2
+                && message.messageType != 3
+                && message.messageType != 5
+                && message.messageType != 18) {
+
+            return false;
+        }
+
+        if (message.messageType == 5) {
+            return true;
+        }
+
+        if (message.lat == null
+                || message.lon == null) {
+
+            return false;
+        }
+
+        if (!Double.isFinite(message.lat)
+                || message.lat > 90
+                || message.lat < -90) {
+
+            return false;
+        }
+
+        if (!Double.isFinite(message.lon)
+                || message.lon > 180
+                || message.lon < -180) {
+
+            return false;
+        }
+
+        return !(message.lat == 0.0
+                && message.lon == 0.0);
     }
 }

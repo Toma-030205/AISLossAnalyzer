@@ -73,18 +73,7 @@ public class AisDecoder {
 
         // 単一メッセージ
         if (total <= 1) {
-
-            String bits = decodePayload(payload);
-
-            if (fill > 0 && fill < bits.length()) {
-
-                bits = bits.substring(
-                        0,
-                        bits.length() - fill
-                );
-            }
-
-            return build(bits);
+            return build(payload, fill);
         }
 
         // マルチフラグメント
@@ -136,18 +125,7 @@ public class AisDecoder {
 
             fragmentBuffer.remove(key);
 
-            String bits = decodePayload(sb.toString());
-
-            if (fe.lastFillBits > 0
-                    && fe.lastFillBits < bits.length()) {
-
-                bits = bits.substring(
-                        0,
-                        bits.length() - fe.lastFillBits
-                );
-            }
-
-            return build(bits);
+            return build(sb.toString(), fe.lastFillBits);
         }
     }
 
@@ -163,280 +141,128 @@ public class AisDecoder {
         }
     }
 
-    private static String decodePayload(String payload) {
+    private static AisMessage build(String payload, int fillBits) {
 
-        StringBuilder sb =
-                new StringBuilder(payload.length() * 6);
+        BitPayload bits = new BitPayload(payload, fillBits);
 
-        for (char c : payload.toCharArray()) {
-
-            int val = c - 48;
-
-            if (val > 40) {
-                val -= 8;
-            }
-
-            int sixBit =
-                    val & 0x3F;
-
-            for (int bit = 5; bit >= 0; bit--) {
-
-                sb.append(
-                        ((sixBit >> bit) & 1) == 1
-                                ? '1'
-                                : '0');
-            }
+        if (bits.length() < 38) {
+            return null;
         }
 
-        return sb.toString();
-    }
+        try {
+            int type = bits.unsigned(0, 6);
+            AisMessage msg = new AisMessage();
+            msg.messageType = type;
+            msg.mmsi = bits.unsigned(8, 30);
+            msg.bits = null;
 
-    private static AisMessage build(String bits) {
-
-    if (bits == null || bits.length() < 38) {
-
-        return null;
-    }
-
-    try {
-
-        int type =
-                Integer.parseInt(
-                        bits.substring(0, 6),
-                        2);
-
-        int mmsi =
-                Integer.parseInt(
-                        bits.substring(8, 38),
-                        2);
-
-        AisMessage msg =
-                new AisMessage();
-
-        msg.messageType = type;
-        msg.mmsi = mmsi;
-        msg.bits = null;
-
-        // ==========================
-        // Type 1,2,3 (Class A)
-        // ==========================
-        if (type == 1
-                || type == 2
-                || type == 3) {
-
-            if (bits.length() >= 137) {
-
-                msg.navStatus =
-                        Integer.parseInt(
-                                bits.substring(38, 42),
-                                2);
-
-                int sogRaw =
-                        Integer.parseInt(
-                                bits.substring(50, 60),
-                                2);
-
-                msg.sog =
-                        sogRaw == 1023
-                                ? null
-                                : sogRaw / 10.0;
-
-                msg.lon =
-                        twosComp(
-                                bits.substring(61, 89))
-                                / 600000.0;
-
-                msg.lat =
-                        twosComp(
-                                bits.substring(89, 116))
-                                / 600000.0;
-
-                int cogRaw =
-                        Integer.parseInt(
-                                bits.substring(116, 128),
-                                2);
-
-                msg.cog =
-                        cogRaw >= 3600
-                                ? null
-                                : cogRaw / 10.0;
-
-                int headingRaw =
-                        Integer.parseInt(
-                                bits.substring(128, 137),
-                                2);
-
-                msg.trueHeading =
-                        headingRaw >= 360
-                                ? null
-                                : (double) headingRaw;
+            if ((type == 1 || type == 2 || type == 3)
+                    && bits.length() >= 137) {
+                msg.navStatus = bits.unsigned(38, 4);
+                int sogRaw = bits.unsigned(50, 10);
+                msg.sog = sogRaw == 1023 ? null : sogRaw / 10.0;
+                msg.lon = bits.signed(61, 28) / 600000.0;
+                msg.lat = bits.signed(89, 27) / 600000.0;
+                int cogRaw = bits.unsigned(116, 12);
+                msg.cog = cogRaw >= 3600 ? null : cogRaw / 10.0;
+                int headingRaw = bits.unsigned(128, 9);
+                msg.trueHeading = headingRaw >= 360 ? null : (double) headingRaw;
             }
-        }
 
-        // ==========================
-        // Type18 (Class B)
-        // ==========================
-        if (type == 18) {
-
-            if (bits.length() >= 133) {
-
-                int sogRaw =
-                        Integer.parseInt(
-                                bits.substring(46, 56),
-                                2);
-
-                msg.sog =
-                        sogRaw == 1023
-                                ? null
-                                : sogRaw / 10.0;
-
-                msg.lon =
-                        twosComp(
-                                bits.substring(57, 85))
-                                / 600000.0;
-
-                msg.lat =
-                        twosComp(
-                                bits.substring(85, 112))
-                                / 600000.0;
-
-                int cogRaw =
-                        Integer.parseInt(
-                                bits.substring(112, 124),
-                                2);
-
-                msg.cog =
-                        cogRaw >= 3600
-                                ? null
-                                : cogRaw / 10.0;
-
-                int headingRaw =
-                        Integer.parseInt(
-                                bits.substring(124, 133),
-                                2);
-
-                msg.trueHeading =
-                        headingRaw >= 360
-                                ? null
-                                : (double) headingRaw;
-
+            if (type == 18 && bits.length() >= 133) {
+                int sogRaw = bits.unsigned(46, 10);
+                msg.sog = sogRaw == 1023 ? null : sogRaw / 10.0;
+                msg.lon = bits.signed(57, 28) / 600000.0;
+                msg.lat = bits.signed(85, 27) / 600000.0;
+                int cogRaw = bits.unsigned(112, 12);
+                msg.cog = cogRaw >= 3600 ? null : cogRaw / 10.0;
+                int headingRaw = bits.unsigned(124, 9);
+                msg.trueHeading = headingRaw >= 360 ? null : (double) headingRaw;
                 if (bits.length() >= 147) {
-                    msg.classBCsUnit =
-                            bits.charAt(141) == '1';
-                    msg.assignedMode =
-                            bits.charAt(146) == '1';
+                    msg.classBCsUnit = bits.unsigned(141, 1) == 1;
+                    msg.assignedMode = bits.unsigned(146, 1) == 1;
                 }
             }
-        }
 
-        // ==========================
-        // Type5
-        // ==========================
-        if (type == 5) {
-            
+            if (type == 5) {
+                parseType5(msg, bits);
+            }
 
-            parseType5(msg, bits);
+            return msg;
 
-        }
-
-        return msg;
-
-    } catch (Exception e) {
-
-        return null;
-    }
-}
-
-    private static void parseType5(
-            AisMessage msg,
-            String bits) {
-
-        int len = bits.length();
-
-        if (len >= 70) {
-
-            msg.imo =
-                    Integer.parseInt(
-                            bits.substring(40, 70), 2);
-        }
-
-        if (len >= 112) {
-
-            msg.callSign =
-                    decode6bit(bits, 70, 42).trim();
-        }
-
-        if (len >= 232) {
-
-            msg.vesselName =
-                    decode6bit(bits, 112, 120).trim();
-        }
-
-        if (len >= 240) {
-
-            msg.shipType =
-                    Integer.parseInt(
-                            bits.substring(232, 240), 2);
-        }
-
-        if (len >= 270) {
-
-            int toBow =
-                    Integer.parseInt(
-                            bits.substring(240,249),
-                            2);
-
-            int toStern =
-                    Integer.parseInt(
-                            bits.substring(249,258),
-                            2);
-
-            msg.shipLength =
-                    toBow + toStern;
-        
-            
-        }
-
-        if (len >= 422) {
-
-            msg.destination =
-                    decode6bit(bits, 302, 120).trim();
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 
-    private static String decode6bit(
-            String bits,
-            int start,
-            int bitLen) {
+    private static void parseType5(AisMessage msg, BitPayload bits) {
 
-        StringBuilder sb = new StringBuilder();
+        if (bits.length() >= 70) {
+            msg.imo = bits.unsigned(40, 30);
+        }
+        if (bits.length() >= 112) {
+            msg.callSign = bits.text(70, 42).trim();
+        }
+        if (bits.length() >= 232) {
+            msg.vesselName = bits.text(112, 120).trim();
+        }
+        if (bits.length() >= 240) {
+            msg.shipType = bits.unsigned(232, 8);
+        }
+        if (bits.length() >= 270) {
+            msg.shipLength = bits.unsigned(240, 9) + bits.unsigned(249, 9);
+        }
+        if (bits.length() >= 422) {
+            msg.destination = bits.text(302, 120).trim();
+        }
+    }
 
-        int end =
-                Math.min(bits.length(), start + bitLen);
+    private static final class BitPayload {
 
-        for (int i = start; i + 6 <= end; i += 6) {
+        private final String payload;
+        private final int bitLength;
 
-            String sub = bits.substring(i, i + 6);
-
-            int v = Integer.parseInt(sub, 2);
-
-            if (v < 0 || v >= SIXBIT_TABLE.length) {
-
-                sb.append(' ');
-
-            } else {
-
-                char ch = SIXBIT_TABLE[v];
-
-                if (ch == '@') {
-                    ch = ' ';
-                }
-
-                sb.append(ch);
-            }
+        BitPayload(String payload, int fillBits) {
+            this.payload = payload == null ? "" : payload;
+            this.bitLength = Math.max(0, this.payload.length() * 6 - Math.max(0, fillBits));
         }
 
-        return sb.toString();
+        int length() {
+            return bitLength;
+        }
+
+        int unsigned(int start, int count) {
+            if (start < 0 || count < 0 || start + count > bitLength || count > 31) {
+                throw new IllegalArgumentException("Invalid AIS bit range");
+            }
+            int value = 0;
+            for (int i = 0; i < count; i++) {
+                int bitIndex = start + i;
+                int sixBit = payload.charAt(bitIndex / 6) - 48;
+                if (sixBit > 40) {
+                    sixBit -= 8;
+                }
+                value = (value << 1) | ((sixBit >> (5 - bitIndex % 6)) & 1);
+            }
+            return value;
+        }
+
+        int signed(int start, int count) {
+            int value = unsigned(start, count);
+            int signMask = 1 << (count - 1);
+            return (value & signMask) == 0 ? value : value - (1 << count);
+        }
+
+        String text(int start, int bitCount) {
+            StringBuilder result = new StringBuilder(bitCount / 6);
+            int end = Math.min(bitLength, start + bitCount);
+            for (int i = start; i + 6 <= end; i += 6) {
+                int value = unsigned(i, 6);
+                char character = value < SIXBIT_TABLE.length ? SIXBIT_TABLE[value] : ' ';
+                result.append(character == '@' ? ' ' : character);
+            }
+            return result.toString();
+        }
     }
 
     public static int twosComp(String bits) {
