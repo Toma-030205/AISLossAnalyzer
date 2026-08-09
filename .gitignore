@@ -1,0 +1,24 @@
+# Java build outputs
+*.class
+/bin/
+/test-bin/
+/src/src/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+/.venv/
+/venv/
+
+# Generated analysis results and local research exports
+/outputs/
+/src/type*_distance_loss.csv
+/src/type*_daily_distance_loss.csv
+/research.py
+
+# Editor and operating-system files
+.DS_Store
+desktop.ini
+Thumbs.db
+*.swp
+*~
