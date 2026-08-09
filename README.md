@@ -167,6 +167,16 @@ python plot_weekday_observed_expected.py
 
 グラフ上のラジオボタンで、メッセージタイプと曜日を切り替えられます。
 
+距離帯別の `LOSS_RATE` 比較と、各メッセージタイプの `OBSERVED` / `EXPECTED`
+比較を静的なPNGとして出力する場合は、次を実行します。
+
+```powershell
+python src/plot_distance_comparisons.py
+```
+
+既定の出力先は `outputs/distance_comparisons/` です。入力・出力ディレクトリを
+変更する場合は `--input-dir` と `--output-dir` を指定できます。
+
 ## 主な構成
 
 ```text
