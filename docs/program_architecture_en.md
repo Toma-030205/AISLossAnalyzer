@@ -83,14 +83,8 @@ Important columns:
 ## Build, test, and visualize
 
 ```powershell
-javac -d bin (Get-ChildItem -Recurse src -Filter *.java |
-    ForEach-Object { $_.FullName })
-
-$sources = @(Get-ChildItem -Recurse src,test -Filter *.java |
-    ForEach-Object { $_.FullName })
-javac -d test-bin $sources
-java -cp test-bin ais.logic.AisCoreCalculationTest
-java -cp test-bin ais.stats.AisStatisticsTest
+.\mvnw.cmd clean package
+.\mvnw.cmd test
 
 python src/plot_distance_comparisons.py
 ```

@@ -3,6 +3,7 @@
 /bin/
 /test-bin/
 /src/src/
+/target/
 
 # Python caches and local environments
 __pycache__/
@@ -15,6 +16,10 @@ __pycache__/
 /src/type*_distance_loss.csv
 /src/type*_daily_distance_loss.csv
 /research.py
+
+# Local runtime datasets (not source code)
+/ais/
+/senc/
 
 # Editor and operating-system files
 .DS_Store

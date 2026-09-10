@@ -1,8 +1,67 @@
 # AISLossAnalyzer
 
+新しく確定した第1段階の要件、解析仕様、データ保存、実装順序は[日本語基本設計書](docs/basic_design_ja.md)、画面一覧、操作、状態、入力検証などは[画面詳細設計書](docs/screen_detail_design_ja.md)、クラス、パッケージ、処理の受け渡し、現行コードの移行方針は[プログラム構成設計書](docs/program_structure_design_ja.md)を参照してください。現在のREADME以下は、既存解析プログラムの実装・実行方法を説明しています。
+
 AISメッセージの受信欠落を推定し、船舶ごと・距離帯ごと・曜日ごとに `OBSERVED` と `EXPECTED` を集計するための解析プログラムです。
 
-現時点では大阪湾周辺の固定受信点を前提に、AISの Type 1/2/3 / Type 5 / Type 18 を対象として集計します。Type 1/2/3はClass A位置報告としてType 1の出力に集約します。将来的には、通信欠落の傾向をもとにシミュレーターへ発展させる想定です。
+現時点では大阪湾周辺の固定受信点を前提に、AISのType 1/2/3/18位置報告とType 5/24船舶情報を共通入力形式へ変換します。既存CLIの集計ではType 1/2/3をClass A位置報告としてType 1の出力へ集約し、Type 5とType 18も扱います。将来的には、通信欠落の傾向をもとにシミュレーターへ発展させる想定です。
+
+## 開発状況
+
+反復1として、Maven Wrapper、JUnit 5、新しい不変データモデル、期待送信間隔・変針・欠落数の解析コア、現行`AisMessage`からの移行用アダプターを追加済みです。
+
+反復2として、次の共通入力パイプラインを追加済みです。
+
+- `!AIVDM`/`!AIVDO`の構文・チェックサム検証、複数断片の再構成
+- Type 1/2/3/5/18/24のType別デコードと正規化
+- 同一MMSI・Type・完成payloadを1秒以内で重複除外
+- 日本時間17桁時刻の`.ais`/`.ais.gz`読込、日付カタログ、同日複数ファイルの時系列マージ
+- 同名の`.ais`/`.ais.gz`で内容が同一の場合の二重読込防止と入力SHA-256
+- UDP受信、UTF-8行分割、PC到着時刻の付与（初期ポート候補17020）
+- 過去入力と模擬リアルタイム入力が同じ正規化結果になる一致試験
+
+反復3として、次の欠落・鮮度・空間集計を追加済みです。
+
+- 区間始点の状態を使う期待送信間隔、30分以上の空白・30km超の距離差・一時停止境界の除外
+- 推定欠落数と推定送信時刻、UTM 53N上の直線補間位置
+- 期待間隔の2倍・3倍・5倍に対応できる情報鮮度状態と鮮度違反時間
+- Proj4JによるEPSG:32653投影、2km格子、0～70kmの5km距離帯
+- 5分×格子×Classおよび5分×距離帯×Classの疎な集計
+- 推定欠落率、鮮度違反率、期待送信数30件・異なる3隻によるデータ不足判定
+- 日・曜日・月・暦年・時間帯への再集計
+- 過去入力と模擬リアルタイム入力を解析結果まで比較する一致試験
+
+反復4として、次のSQLite保存基盤を追加済みです。
+
+- Xerial SQLite JDBC、`schema_version`による再実行可能なスキーマ移行、WAL・外部キー・busy timeout設定
+- 受信局プロファイルと適用期間重複検査、解析条件プロファイルの保存・読込
+- 解析実行、5分格子・距離帯集計、5分・日別の船舶存在、Type 5/24船舶情報履歴の保存
+- 診断コード別件数・最初/最後の時刻、解析除外期間の保存（生NMEA、payload、全航跡は保存しない）
+- 同一日・同一入力・同一受信局・同一解析条件の置換と、失敗時に旧結果を維持する一括トランザクション
+- SQLite書込を直列化する単一バックグラウンドキュー
+- 既定DB保存先`%LOCALAPPDATA%\AISLossAnalyzer\data\aisloss.db`
+
+反復5として、次の地図・過去ログ再生画面を追加済みです。
+
+- `senc`フォルダーから海岸線、陸地、河川を抽出し、Mercator投影・パン・ポインター中心ズームで描画
+- 日付または`.ais`/`.ais.gz`直接選択、1/5/10/30/60/300倍再生（初期60倍）、一時停止、先頭復帰、時刻スライダー
+- 後方シーク時に解析エンジンを日初から再生成し、指定時刻まで再計算
+- 2km格子の鮮度違反率/推定欠落率9色表示、データ不足斜線、10km/30km圏、受信局
+- 船舶の向き、鮮度塗り色、Class A/B枠色、クリック選択、選択船だけの60分航跡と詳細表示
+- 格子クリック選択、分子・分母・船舶数・不足理由・受信局距離の詳細表示
+- 再生位置を変えない明示的な一日分解析と、SQLiteへの一括保存
+
+反復6として、次のリアルタイム受信・長期集計・出力を追加済みです。
+
+- 研究室LAN向けUDP受信の開始、停止、同一セッション再開、表示リセットと受信中の画面切替防止（開始直後の停止や異常終了時の部分保存にも対応）
+- 上限付き受信キュー、あふれた区間の解析カーソル切断・欠落数とは別のPC処理遅延診断、1秒単位の地図更新
+- 生NMEAを保存せず、5分境界と停止・終了時に集計・診断・Type 5/24船舶情報だけをSQLiteへ保存
+- 保存済み結果を選択した受信局・解析条件で分離し、日別・曜日別・月別・暦年別に再集計
+- 0～70kmの5km距離帯グラフ、0～23時の時間帯グラフ、Class別線種、母数範囲とデータ不足判定を含む集計表
+- 現在の表をBOM付きUTF-8 CSV、グラフをPNG、展開済み凡例と解析条件注記を含む地図をPNGとして個別保存
+- リアルタイムの停止・再開・保存、複数日検索、CSV/PNG生成の自動試験
+
+現行CLIと旧`OsakaBayMap`は回帰比較のため一時的に残しています。
 
 ## 目的
 
@@ -18,7 +77,15 @@ AISメッセージの受信欠落を推定し、船舶ごと・距離帯ごと�
 
 ## 入力データ
 
-入力は `.ais` ファイルです。
+新しい共通入力層は`.ais`、`.ais.gz`、UDPを扱います。過去ログの各行は、研究室ログの形式に合わせて`yyyyMMddHHmmssSSS`の日本時間、空白、NMEA文の順とします。
+
+```text
+20260904093000123 !AIVDM,1,1,,A,...*HH
+```
+
+UDPはUTF-8の`!AIVDM`/`!AIVDO`を受け取り、データグラム内に複数行があれば行単位に分けます。ポートは`UdpSourceConfig`で変更でき、初期候補値は17020です。
+
+以下は、移行期間中の既存CLIに限った入力方法です。
 
 現在のメインプログラムでは、入力ディレクトリが以下に固定されています。
 
@@ -73,7 +140,7 @@ LOSS = max(0, estimatedTransmissions - 1)
 Class B CSは規格世代差があります。既定値は実データとITU-R M.1371-5に合わせて高速時も30秒です。M.1371-6の14kt超15秒を評価する場合は、次のように変更できます。
 
 ```powershell
-java -Dais.classBCsHighSpeedIntervalSeconds=15 -cp ..\bin ais.main.Main
+java -Dais.classBCsHighSpeedIntervalSeconds=15 -cp target\classes ais.main.Main
 ```
 
 ## 外れ値除外
@@ -94,40 +161,55 @@ java -Dais.classBCsHighSpeedIntervalSeconds=15 -cp ..\bin ais.main.Main
 倍率はJavaのシステムプロパティで変更できます。
 
 ```powershell
-java -Dais.trackGapMultiplier=5 -cp ..\bin ais.main.Main
+java -Dais.trackGapMultiplier=5 -cp target\classes ais.main.Main
 ```
 
 上の例では最大正常送信間隔の5倍以上を航跡切断として扱います。
 
 ## ビルド
 
-PowerShellでリポジトリ直下から実行します。
+JDK 26を使用し、Java 25互換のクラスを生成します。Mavenの事前インストールは不要です。PowerShellでリポジトリ直下から実行してください。
 
 ```powershell
-javac -d bin (Get-ChildItem -Recurse src -Filter *.java | ForEach-Object { $_.FullName })
+.\mvnw.cmd clean package
 ```
+
+初回だけ、固定したMaven本体とテスト用ライブラリをダウンロードします。生成物は`target`に出力されます。
 
 ## テスト
 
-製品ソースとテストを `test-bin` にコンパイルして実行します。
+JUnitテスト、新旧解析コアの一致テスト、既存のmain形式回帰テストをまとめて実行します。
 
 ```powershell
-$sources = @(
-    Get-ChildItem -Recurse src,test -Filter *.java |
-        ForEach-Object { $_.FullName }
-)
-javac -d test-bin $sources
-java -cp test-bin ais.logic.AisCoreCalculationTest
-java -cp test-bin ais.stats.AisStatisticsTest
+.\mvnw.cmd test
 ```
 
 ## 実行
 
-CSVを `src` 配下に出力するため、現状では `src` ディレクトリから実行します。
+新GUIはリポジトリ直下から次のコマンドで起動します。既定では`./senc`と`./ais`を参照します。
 
 ```powershell
-cd C:\Users\Owner\AISLossAnalyzer\src
-java -cp ..\bin ais.main.Main
+.\mvnw.cmd exec:java
+```
+
+別のデータ場所またはSQLiteファイルを使う場合は次のように指定できます。
+
+```powershell
+.\mvnw.cmd exec:java "-Dexec.args=--senc C:\data\senc --ais-data C:\data\ais --database C:\data\aisloss.db"
+```
+
+画面を開かずにSENC・AISログ・SQLiteの初期化だけを確認する場合:
+
+```powershell
+.\mvnw.cmd exec:java "-Dexec.args=--validate-only"
+```
+
+現行の解析用CLIを比較確認のために実行する場合は、ビルド後に次を実行します。
+
+```powershell
+Push-Location src
+java -cp ..\target\classes ais.main.Main
+Pop-Location
 ```
 
 実行すると、コンソールにメッセージタイプ別の概要が表示され、CSVが出力されます。
@@ -161,8 +243,7 @@ java -cp ..\bin ais.main.Main
 実行例:
 
 ```powershell
-cd C:\Users\Owner\AISLossAnalyzer\src
-python plot_weekday_observed_expected.py
+python src\plot_weekday_observed_expected.py
 ```
 
 グラフ上のラジオボタンで、メッセージタイプと曜日を切り替えられます。
@@ -180,8 +261,44 @@ python src/plot_distance_comparisons.py
 ## 主な構成
 
 ```text
+pom.xml / mvnw.cmd
+  Java 25互換ビルド、JUnit、固定Mavenバージョンを管理する。
+
+src/main/java/ais/domain/
+  位置報告、船舶情報、受信局、解析条件などの不変データモデル。
+
+src/main/java/ais/analysis/
+  期待送信間隔、変針、区間除外、欠落位置、鮮度、船舶状態を統括する解析エンジン。
+
+src/main/java/ais/spatial/
+  Haversine距離、UTM 53N投影、2km格子、5km距離帯、航跡の時間配分。
+
+src/main/java/ais/aggregate/
+  5分×空間×Class集計、船舶数、率・データ不足判定、期間別再集計。
+
+src/main/java/ais/input/, ais/nmea/, ais/decode/
+  過去ログとUDPに共通する受信、検証、断片再構成、Type別デコード、重複除外。
+
+src/main/java/ais/input/history/, ais/input/live/
+  日別ログのストリーミング読込とUDP受信。それぞれ同じ共通入力へ接続する。
+
+src/main/java/ais/storage/
+  SQLiteスキーマ移行、プロファイル・解析実行・集計・船舶情報・診断の永続化、置換トランザクション、単一書込キュー。
+
+src/main/java/ais/map/
+  SENCカタログ・読込、Mercator投影、viewport、船舶・格子のクリック判定。
+
+src/main/java/ais/app/, ais/ui/, ais/ui/viewmodel/
+  過去ログ再生・後方再計算・全日保存、リアルタイムセッション、長期集計、メイン画面、地図描画、操作・詳細パネル、Swing非依存ViewModel。
+
+src/main/java/ais/export/
+  表CSV、JFreeChartによるグラフPNG、凡例付き地図PNG、出力ファイル名と注記。
+
+src/main/java/ais/decode/LegacyMessageAdapter.java
+  現行AisMessageを新しい正規化イベントへ変換する移行用アダプター。
+
 src/ais/main/Main.java
-  解析の入口。AISファイルの読み込み、集計、CSV出力を行う。
+  移行期間だけ保持する旧解析CLI。新旧結果の一致確認後に削除する。
 
 src/ais/parser/
   AISファイルの読み込みとNMEA/AISメッセージのデコード。
@@ -210,8 +327,10 @@ src/plot_weekday_observed_expected.py
 
 ## 現時点の注意点
 
-- 入力ディレクトリはコード内に固定されています。
-- 出力CSVの保存場所は実行時のカレントディレクトリに依存します。
+- 既存CLIの入力ディレクトリはコード内に固定されています。新GUIの過去ログは日付一覧またはファイル選択を使います。
+- 新GUIのCSV/PNG保存先は保存ダイアログで選択します。既存CLIのCSVだけは実行時のカレントディレクトリへ出力します。
+- リアルタイムUDPの初期ポートは17020です。バインド先とポートを画面から変更する設定画面は後続反復で接続します。
+- 長時間連続運転時の実受信レート、メモリ使用量、SQLite容量は研究室PCと実回線での性能試験が必要です。
 - Message 16/23による個別の割当送信間隔は追跡していないため、割当モードの区間では自律モードの期待間隔を使用します。
 - Class B SOの回線混雑による変更送信間隔は受信データだけでは確定できないため、通常送信間隔を使用します。
 - コンソール表示の一部コメントや日本語文字列は文字化けしている箇所があります。

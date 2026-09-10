@@ -1,0 +1,11 @@
+package ais.analysis;
+
+public enum IntervalExclusionReason {
+    FIRST_REPORT,
+    NEGATIVE_INTERVAL,
+    EXPECTED_INTERVAL_UNAVAILABLE,
+    GAP_30_MINUTES_OR_MORE,
+    DISTANCE_JUMP_OVER_30_KM,
+    INVALID_POSITION,
+    LIVE_PAUSE_BOUNDARY
+}
