@@ -58,6 +58,12 @@ public final class ChartRenderer {
     private static final int POINT_LABEL_LIMIT = 28;
 
     public JFreeChart create(AggregateResult result) {
+        if (result.request().axis() == AggregateAxis.DISTANCE_BY_HOUR) {
+            return new DistanceHourHeatmapRenderer().create(result);
+        }
+        if (usesDailyDistanceSummary(result)) {
+            return new DailyDistanceSummaryChartRenderer().create(result);
+        }
         DefaultCategoryDataset values = new DefaultCategoryDataset();
         DefaultCategoryDataset insufficient = new DefaultCategoryDataset();
         Map<ItemKey, AggregateRow> rowLookup = new HashMap<>();
@@ -126,6 +132,15 @@ public final class ChartRenderer {
             plot.addAnnotation(new ThirtyKilometerAnnotation());
         }
         return chart;
+    }
+
+    private static boolean usesDailyDistanceSummary(
+            AggregateResult result) {
+        return result.request().axis() == AggregateAxis.DISTANCE_BAND
+                && result.request().dimension()
+                == ais.aggregate.RollupDimension.DAY
+                && result.request().startDate().isBefore(
+                result.request().endDate());
     }
 
     private static void configureFonts(JFreeChart chart) {

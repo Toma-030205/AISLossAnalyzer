@@ -6,6 +6,8 @@ import ais.domain.FreshnessState;
 import ais.domain.VesselClass;
 import ais.ui.viewmodel.GridDetailViewModel;
 import ais.ui.viewmodel.VesselDetailViewModel;
+import ais.ui.viewmodel.SimulationVesselDetailViewModel;
+import ais.simulation.communication.ReceptionOutcome;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -42,10 +44,17 @@ public final class SelectionDetailPanel extends JPanel {
 
     public void update(VesselDetailViewModel vesselDetail,
                        GridDetailViewModel gridDetail) {
-        if (vesselDetail == null) {
+        update(vesselDetail, gridDetail, null);
+    }
+
+    public void update(
+            VesselDetailViewModel vesselDetail,
+            GridDetailViewModel gridDetail,
+            SimulationVesselDetailViewModel simulationDetail) {
+        if (vesselDetail == null && simulationDetail == null) {
             showPlaceholder(vessel, "地図上の船舶を選択してください");
         } else {
-            populateVessel(vesselDetail);
+            populateVessel(vesselDetail, simulationDetail);
         }
         if (gridDetail == null) {
             showPlaceholder(grid, "地図上の色付き格子を選択してください");
@@ -56,29 +65,74 @@ public final class SelectionDetailPanel extends JPanel {
         repaint();
     }
 
-    private void populateVessel(VesselDetailViewModel detail) {
+    private void populateVessel(
+            VesselDetailViewModel detail,
+            SimulationVesselDetailViewModel simulation) {
         vessel.removeAll();
-        addLine(vessel, "MMSI", String.format("%09d", detail.mmsi()));
-        addLine(vessel, "船名", detail.vesselName() == null
-                ? "未取得" : detail.vesselName());
-        addLine(vessel, "全長", detail.shipLengthMeters() == null
-                ? "未取得" : detail.shipLengthMeters() + " m");
-        addLine(vessel, "Class", classLabel(detail.vesselClass()));
-        addLine(vessel, "位置", String.format("%.6f, %.6f",
-                detail.latitude(), detail.longitude()));
-        addLine(vessel, "船速", decimal(detail.sogKnots(), "kt"));
-        addLine(vessel, "対地針路", decimal(detail.cogDegrees(), "°"));
-        addLine(vessel, "船首方位", detail.trueHeadingDegrees() == null
-                ? "—" : String.format("%.0f°",
-                detail.trueHeadingDegrees()));
-        addLine(vessel, "航行状態", navigationStatus(
-                detail.navigationStatus()));
-        addLine(vessel, "メッセージ", "Type " + detail.messageType());
-        addLine(vessel, "情報鮮度", freshnessLabel(detail.freshness()));
-        addLine(vessel, "経過時間", age(detail.ageSeconds()));
-        addLine(vessel, "受信局距離", String.format("%.1f km",
-                detail.receiverDistanceKilometers()));
+        int mmsi = detail != null ? detail.mmsi() : simulation.mmsi();
+        VesselClass vesselClass = detail != null
+                ? detail.vesselClass() : simulation.vesselClass();
+        addLine(vessel, "MMSI", String.format("%09d", mmsi));
+        if (detail != null) {
+            addLine(vessel, "船名", detail.vesselName() == null
+                    ? "未取得" : detail.vesselName());
+            addLine(vessel, "全長", detail.shipLengthMeters() == null
+                    ? "未取得" : detail.shipLengthMeters() + " m");
+        }
+        addLine(vessel, "Class", classLabel(vesselClass));
+        if (detail != null) {
+            addLine(vessel, "受信位置", String.format("%.6f, %.6f",
+                    detail.latitude(), detail.longitude()));
+            addLine(vessel, "船速", decimal(detail.sogKnots(), "kt"));
+            addLine(vessel, "対地針路", decimal(detail.cogDegrees(), "°"));
+            addLine(vessel, "船首方位", detail.trueHeadingDegrees() == null
+                    ? "—" : String.format("%.0f°",
+                    detail.trueHeadingDegrees()));
+            addLine(vessel, "航行状態", navigationStatus(
+                    detail.navigationStatus()));
+            addLine(vessel, "メッセージ", "Type " + detail.messageType());
+            addLine(vessel, "情報鮮度", freshnessLabel(detail.freshness()));
+            addLine(vessel, "経過時間", age(detail.ageSeconds()));
+            addLine(vessel, "受信局距離", String.format("%.1f km",
+                    detail.receiverDistanceKilometers()));
+        }
+        if (simulation != null) {
+            addLine(vessel, "真位置", String.format("%.6f, %.6f",
+                    simulation.truthPosition().latitude(),
+                    simulation.truthPosition().longitude()));
+            addLine(vessel, "位置差",
+                    simulation.positionDifferenceMeters() == null
+                            ? "未受信"
+                            : String.format("%.0f m",
+                            simulation.positionDifferenceMeters()));
+            addLine(vessel, "最終受信から",
+                    simulation.secondsSinceLastReception() == null
+                            ? "未受信"
+                            : age(simulation.secondsSinceLastReception()));
+            addLine(vessel, "直前判定",
+                    outcomeLabel(simulation.lastOutcome()));
+            addLine(vessel, "受信確率",
+                    simulation.receptionProbability() == null
+                            ? "適用外"
+                            : String.format("%.1f%%",
+                            simulation.receptionProbability() * 100.0));
+            addLine(vessel, "距離帯",
+                    simulation.distanceBandLabel() == null
+                            ? "—" : simulation.distanceBandLabel());
+            addLine(vessel, "通信モデル", simulation.modelLabel());
+        }
         addVerticalFiller(vessel);
+    }
+
+    private static String outcomeLabel(ReceptionOutcome outcome) {
+        if (outcome == null) {
+            return "—";
+        }
+        return switch (outcome) {
+            case RECEIVED -> "受信";
+            case LOST -> "欠落";
+            case OUT_OF_MODEL -> "適用外";
+        };
     }
 
     private void populateGrid(GridDetailViewModel detail) {

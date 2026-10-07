@@ -27,3 +27,11 @@ desktop.ini
 Thumbs.db
 *.swp
 *~
+
+# Codex-generated presentation work files
+/.codex-presentation-s4/
+/.codex-slide-build/
+
+# Keep only the latest presentation deliverable in Git
+/presentation-output/*
+!/presentation-output/AIS通信シミュレーション_実装内容と妥当性確認結果_表紙情報修正版.pptx

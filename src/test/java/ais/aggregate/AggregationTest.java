@@ -100,6 +100,15 @@ class AggregationTest {
                 .sum();
         assertEquals(1, distanceObserved);
         assertEquals(3, distanceMissing);
+        assertEquals(1, snapshot.distanceVesselDayMetrics().size());
+        Map.Entry<DistanceVesselDayKey, MetricCounts> vesselDay =
+                snapshot.distanceVesselDayMetrics().entrySet()
+                        .iterator().next();
+        assertEquals(LocalDate.of(2026, 9, 4),
+                vesselDay.getKey().observedDate());
+        assertEquals(431_000_001, vesselDay.getKey().mmsi());
+        assertEquals(new MetricCounts(1, 3, 400.0, 100.0),
+                vesselDay.getValue());
         assertEquals(0, snapshot.outsideDistanceRangeCount());
     }
 

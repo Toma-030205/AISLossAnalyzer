@@ -14,6 +14,9 @@ import ais.domain.ReceiverProfile;
 import ais.domain.SourceMode;
 import ais.domain.VesselMetadataUpdate;
 import ais.input.InputDiagnostic;
+import ais.input.history.HistoricalDaySelection;
+import ais.input.history.InputFingerprint;
+import ais.input.history.InputFingerprintCalculator;
 import ais.storage.AnalysisResultStore;
 import ais.storage.AnalysisRun;
 import ais.storage.DiagnosticSummary;
@@ -21,18 +24,24 @@ import ais.storage.VesselMetadataObservation;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.function.Supplier;
 import java.util.function.Function;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class HistoricalAnalysisService implements AutoCloseable {
 
@@ -43,6 +52,9 @@ public final class HistoricalAnalysisService implements AutoCloseable {
     private final AnalysisResultStore resultStore;
     private final Supplier<AnalysisEngine> engineFactory;
     private final ExecutorService analysisExecutor;
+    private final AtomicBoolean batchRunning = new AtomicBoolean();
+    private final AtomicBoolean batchCancellationRequested =
+            new AtomicBoolean();
 
     private HistoricalReplayDataset dataset;
     private ReceiverProfile activeReceiver;
@@ -181,50 +193,62 @@ public final class HistoricalAnalysisService implements AutoCloseable {
                     ? ReplayState.END : ReplayState.PAUSED;
             state = ReplayState.ANALYZING_DAY;
             try {
-                AnalysisRunId runId = AnalysisRunId.create();
-                AnalysisContext context = new AnalysisContext(
-                        activeReceiver, profile, SourceMode.HISTORICAL,
-                        runId, dataset.startTime());
-                AnalysisEngine fullDayEngine = engineFactory.get();
-                fullDayEngine.begin(context);
-                List<VesselMetadataObservation> metadata =
-                        new ArrayList<>();
-                for (NormalizedAisEvent event : dataset.events()) {
-                    var analysisEvents = fullDayEngine.accept(event);
-                    if (event instanceof VesselMetadataUpdate update) {
-                        analysisEvents.stream()
-                                .filter(VesselMetadataUpdatedEvent.class::isInstance)
-                                .map(VesselMetadataUpdatedEvent.class::cast)
-                                .findFirst()
-                                .ifPresent(updated -> metadata.add(
-                                        new VesselMetadataObservation(
-                                                updated.metadata(),
-                                                update.messageType())));
-                    }
-                    if (Thread.currentThread().isInterrupted()) {
-                        throw new IllegalStateException(
-                                "full-day analysis cancelled");
-                    }
-                }
-                AnalysisRunSummary summary = fullDayEngine.complete(
-                        dataset.endTime());
-                AnalysisRun run = new AnalysisRun(
-                        runId, SourceMode.HISTORICAL,
-                        dataset.selection().date(),
-                        dataset.logicalInputName(), dataset.fingerprint(),
-                        activeReceiver.id(), profile.id(), dataset.startTime());
-                List<DiagnosticSummary> diagnostics =
-                        summarizeDiagnostics(dataset.diagnostics(), summary);
-                resultStore.replaceCompletedRun(
-                        run, summary, diagnostics, List.of(), metadata);
+                FullDayAnalysisResult result = analyzeAndStore(
+                        dataset, activeReceiver,
+                        () -> Thread.currentThread().isInterrupted(),
+                        () -> { });
                 state = returnState;
-                return new FullDayAnalysisResult(
-                        runId, summary, dataset.diagnostics().size());
+                return result;
             } catch (Exception failure) {
                 state = returnState;
                 throw failure;
             }
         });
+    }
+
+    public CompletableFuture<HistoricalBatchResult> analyzeAndSaveBatch(
+            List<HistoricalDaySelection> selections,
+            boolean skipCompletedEquivalent,
+            BatchProgressListener progress) {
+        Objects.requireNonNull(selections, "selections");
+        List<HistoricalDaySelection> ordered = selections.stream()
+                .sorted(Comparator.comparing(HistoricalDaySelection::date))
+                .toList();
+        if (ordered.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "at least one historical day is required");
+        }
+        Set<LocalDate> dates = new HashSet<>();
+        for (HistoricalDaySelection selection : ordered) {
+            if (!dates.add(selection.date())) {
+                throw new IllegalArgumentException(
+                        "duplicate historical date: " + selection.date());
+            }
+        }
+        if (!batchRunning.compareAndSet(false, true)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                            "historical batch analysis is already running"));
+        }
+        batchCancellationRequested.set(false);
+        BatchProgressListener listener = progress == null
+                ? ignored -> { } : progress;
+        CompletableFuture<HistoricalBatchResult> operation = submit(() ->
+                analyzeBatch(ordered, skipCompletedEquivalent, listener));
+        return operation.whenComplete((ignored, failure) -> {
+            batchCancellationRequested.set(false);
+            batchRunning.set(false);
+        });
+    }
+
+    public void cancelBatchAnalysis() {
+        if (batchRunning.get()) {
+            batchCancellationRequested.set(true);
+        }
+    }
+
+    public boolean isBatchAnalysisRunning() {
+        return batchRunning.get();
     }
 
     public AnalysisFilter filter() {
@@ -233,7 +257,188 @@ public final class HistoricalAnalysisService implements AutoCloseable {
 
     @Override
     public void close() {
+        batchCancellationRequested.set(true);
         analysisExecutor.shutdownNow();
+    }
+
+    private HistoricalBatchResult analyzeBatch(
+            List<HistoricalDaySelection> selections,
+            boolean skipCompletedEquivalent,
+            BatchProgressListener progress) {
+        Instant startedAt = Instant.now();
+        int saved = 0;
+        int skipped = 0;
+        List<HistoricalBatchFailure> failures = new ArrayList<>();
+        boolean cancelled = false;
+
+        for (int index = 0; index < selections.size(); index++) {
+            if (batchCancellationRequested.get()) {
+                cancelled = true;
+                break;
+            }
+            HistoricalDaySelection selection = selections.get(index);
+            int dayNumber = index + 1;
+            int savedBefore = saved;
+            int skippedBefore = skipped;
+            int failedBefore = failures.size();
+            try {
+                ReceiverProfile receiver = Objects.requireNonNull(
+                        receiverResolver.apply(selection.date()),
+                        "no receiver profile is effective on "
+                                + selection.date());
+                emitBatchProgress(progress, selection.date(),
+                        HistoricalBatchProgress.Stage.FINGERPRINTING,
+                        dayNumber, selections.size(), saved, skipped,
+                        failures.size(), 0);
+                InputFingerprint fingerprint =
+                        new InputFingerprintCalculator().calculate(
+                                selection.files(),
+                                batchCancellationRequested::get);
+                ensureNotCancelled(batchCancellationRequested::get);
+                if (skipCompletedEquivalent
+                        && resultStore.hasCompletedEquivalentRun(
+                        selection.date(), fingerprint,
+                        receiver.id(), profile.id())) {
+                    skipped++;
+                    emitBatchProgress(progress, selection.date(),
+                            HistoricalBatchProgress.Stage.SKIPPED,
+                            dayNumber, selections.size(), saved, skipped,
+                            failures.size(), 0);
+                    continue;
+                }
+                emitBatchProgress(progress, selection.date(),
+                        HistoricalBatchProgress.Stage.LOADING,
+                        dayNumber, selections.size(), saved, skipped,
+                        failures.size(), 0);
+                HistoricalReplayDataset loaded = loader.load(
+                        selection, fingerprint, records -> {
+                            emitBatchProgress(progress, selection.date(),
+                                    HistoricalBatchProgress.Stage.LOADING,
+                                    dayNumber, selections.size(),
+                                    savedBefore, skippedBefore,
+                                    failedBefore, records);
+                            ensureNotCancelled(
+                                    batchCancellationRequested::get);
+                        });
+                ensureNotCancelled(batchCancellationRequested::get);
+                if (loaded.isEmpty()) {
+                    throw new IllegalStateException(
+                            "有効なType 1/2/3/18/5/24がありません");
+                }
+                emitBatchProgress(progress, selection.date(),
+                        HistoricalBatchProgress.Stage.ANALYZING,
+                        dayNumber, selections.size(), saved, skipped,
+                        failures.size(), loaded.inputRecordCount());
+                int progressSaved = saved;
+                int progressSkipped = skipped;
+                int progressFailed = failures.size();
+                analyzeAndStore(loaded, receiver,
+                        batchCancellationRequested::get,
+                        () -> emitBatchProgress(
+                                progress, selection.date(),
+                                HistoricalBatchProgress.Stage.SAVING,
+                                dayNumber, selections.size(),
+                                progressSaved, progressSkipped,
+                                progressFailed,
+                                loaded.inputRecordCount()));
+                saved++;
+                emitBatchProgress(progress, selection.date(),
+                        HistoricalBatchProgress.Stage.SAVED,
+                        dayNumber, selections.size(), saved, skipped,
+                        failures.size(), loaded.inputRecordCount());
+            } catch (CancellationException cancelledDay) {
+                cancelled = true;
+                break;
+            } catch (Exception failure) {
+                failures.add(new HistoricalBatchFailure(
+                        selection.date(), failureMessage(failure)));
+                emitBatchProgress(progress, selection.date(),
+                        HistoricalBatchProgress.Stage.FAILED,
+                        dayNumber, selections.size(), saved, skipped,
+                        failures.size(), 0);
+            }
+        }
+        cancelled = cancelled || batchCancellationRequested.get();
+        return new HistoricalBatchResult(
+                selections.size(), saved, skipped, failures, cancelled,
+                Duration.between(startedAt, Instant.now()));
+    }
+
+    private FullDayAnalysisResult analyzeAndStore(
+            HistoricalReplayDataset source,
+            ReceiverProfile receiver,
+            BooleanSupplier cancelled,
+            Runnable beforeSave) {
+        AnalysisRunId runId = AnalysisRunId.create();
+        AnalysisContext context = new AnalysisContext(
+                receiver, profile, SourceMode.HISTORICAL,
+                runId, source.startTime());
+        AnalysisEngine fullDayEngine = engineFactory.get();
+        fullDayEngine.begin(context);
+        List<VesselMetadataObservation> metadata = new ArrayList<>();
+        for (NormalizedAisEvent event : source.events()) {
+            ensureNotCancelled(cancelled);
+            var analysisEvents = fullDayEngine.accept(event);
+            if (event instanceof VesselMetadataUpdate update) {
+                analysisEvents.stream()
+                        .filter(VesselMetadataUpdatedEvent.class::isInstance)
+                        .map(VesselMetadataUpdatedEvent.class::cast)
+                        .findFirst()
+                        .ifPresent(updated -> metadata.add(
+                                new VesselMetadataObservation(
+                                        updated.metadata(),
+                                        update.messageType())));
+            }
+        }
+        ensureNotCancelled(cancelled);
+        AnalysisRunSummary summary = fullDayEngine.complete(
+                source.endTime());
+        AnalysisRun run = new AnalysisRun(
+                runId, SourceMode.HISTORICAL,
+                source.selection().date(),
+                source.logicalInputName(), source.fingerprint(),
+                receiver.id(), profile.id(), source.startTime());
+        List<DiagnosticSummary> diagnostics =
+                summarizeDiagnostics(source.diagnostics(), summary);
+        beforeSave.run();
+        ensureNotCancelled(cancelled);
+        resultStore.replaceCompletedRun(
+                run, summary, diagnostics, List.of(), metadata);
+        return new FullDayAnalysisResult(
+                runId, summary, source.diagnostics().size());
+    }
+
+    private static void ensureNotCancelled(BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean()
+                || Thread.currentThread().isInterrupted()) {
+            throw new CancellationException(
+                    "historical batch analysis cancelled");
+        }
+    }
+
+    private static void emitBatchProgress(
+            BatchProgressListener listener,
+            LocalDate date,
+            HistoricalBatchProgress.Stage stage,
+            int dayNumber,
+            int totalDays,
+            int savedDays,
+            int skippedDays,
+            int failedDays,
+            long processedRecords) {
+        listener.onProgress(new HistoricalBatchProgress(
+                date, stage, dayNumber, totalDays,
+                savedDays, skippedDays, failedDays, processedRecords));
+    }
+
+    private static String failureMessage(Throwable failure) {
+        Throwable value = failure;
+        while (value.getCause() != null && value.getCause() != value) {
+            value = value.getCause();
+        }
+        String message = value.getMessage();
+        return message == null || message.isBlank()
+                ? value.getClass().getSimpleName() : message;
     }
 
     private void rebuildTo(Instant target) {
@@ -317,6 +522,11 @@ public final class HistoricalAnalysisService implements AutoCloseable {
     @FunctionalInterface
     private interface ThrowingSupplier<T> {
         T get() throws Exception;
+    }
+
+    @FunctionalInterface
+    public interface BatchProgressListener {
+        void onProgress(HistoricalBatchProgress progress);
     }
 
     private static final class MutableDiagnostic {

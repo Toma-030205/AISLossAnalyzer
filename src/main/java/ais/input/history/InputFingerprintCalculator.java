@@ -10,11 +10,20 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 
 public final class InputFingerprintCalculator {
 
     public InputFingerprint calculate(List<Path> files) throws IOException {
+        return calculate(files, () -> Thread.currentThread().isInterrupted());
+    }
+
+    public InputFingerprint calculate(
+            List<Path> files,
+            BooleanSupplier cancelled) throws IOException {
         Objects.requireNonNull(files, "files");
+        Objects.requireNonNull(cancelled, "cancelled");
         if (files.isEmpty()) {
             throw new IllegalArgumentException(
                     "at least one input file is required");
@@ -30,7 +39,8 @@ public final class InputFingerprintCalculator {
         long totalBytes = 0;
 
         for (Path file : ordered) {
-            FileFingerprint fingerprint = calculateFile(file);
+            ensureNotCancelled(cancelled);
+            FileFingerprint fingerprint = calculateFile(file, cancelled);
             combined.update(ByteBuffer.allocate(Long.BYTES)
                     .putLong(fingerprint.uncompressedBytes())
                     .array());
@@ -47,6 +57,13 @@ public final class InputFingerprintCalculator {
     }
 
     static FileFingerprint calculateFile(Path file) throws IOException {
+        return calculateFile(file,
+                () -> Thread.currentThread().isInterrupted());
+    }
+
+    private static FileFingerprint calculateFile(
+            Path file,
+            BooleanSupplier cancelled) throws IOException {
         Objects.requireNonNull(file, "file");
         MessageDigest digest = sha256Digest();
         long byteCount = 0;
@@ -55,6 +72,7 @@ public final class InputFingerprintCalculator {
         try (InputStream input = HistoricalReaders.openBytes(file)) {
             int count;
             while ((count = input.read(buffer)) >= 0) {
+                ensureNotCancelled(cancelled);
                 if (count > 0) {
                     digest.update(buffer, 0, count);
                     byteCount = Math.addExact(byteCount, count);
@@ -62,6 +80,14 @@ public final class InputFingerprintCalculator {
             }
         }
         return new FileFingerprint(digest.digest(), byteCount);
+    }
+
+    private static void ensureNotCancelled(BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean()
+                || Thread.currentThread().isInterrupted()) {
+            throw new CancellationException(
+                    "input fingerprint calculation cancelled");
+        }
     }
 
     private static MessageDigest sha256Digest() {

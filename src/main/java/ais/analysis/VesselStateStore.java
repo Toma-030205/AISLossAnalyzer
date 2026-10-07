@@ -87,6 +87,13 @@ public final class VesselStateStore {
         states.values().forEach(VesselAnalysisState::resetContinuity);
     }
 
+    public void resetContinuity(int mmsi) {
+        VesselAnalysisState state = states.get(mmsi);
+        if (state != null) {
+            state.resetContinuity();
+        }
+    }
+
     public void clear() {
         states.clear();
     }

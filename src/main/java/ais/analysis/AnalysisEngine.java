@@ -2,6 +2,7 @@ package ais.analysis;
 
 import ais.domain.AnalysisContext;
 import ais.domain.NormalizedAisEvent;
+import ais.domain.VesselClass;
 
 import java.time.Instant;
 import java.util.List;
@@ -13,6 +14,11 @@ public interface AnalysisEngine {
     List<AnalysisEvent> accept(NormalizedAisEvent event);
 
     void resetIntervalCursors(Instant resumedAt);
+
+    void resetVesselContinuity(
+            int mmsi,
+            VesselClass vesselClass,
+            IntervalExclusionReason nextReason);
 
     AnalysisSnapshot snapshot(
             Instant displayTime,

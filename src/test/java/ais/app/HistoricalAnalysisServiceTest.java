@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -109,6 +110,115 @@ class HistoricalAnalysisServiceTest {
                         .filter(diagnostic -> diagnostic.code().name()
                                 .equals("INVALID_LOG_LINE"))
                         .count());
+    }
+
+    @Test
+    void batchSavesDatesInOrderSkipsEquivalentRunsAndKeepsReplay()
+            throws Exception {
+        LocalDate nextDay = DAY.plusDays(1);
+        HistoricalDaySelection first = selection(
+                "first.ais", DAY, "20260904");
+        HistoricalDaySelection second = selection(
+                "second.ais", nextDay, "20260905");
+        SqliteDatabase database = configuredDatabase("batch.db");
+        ReceiverProfile receiver = receiver();
+        AnalysisProfile profile = AnalysisProfile.phaseOneDefaults();
+        new JdbcReceiverProfileRepository(database).save(receiver);
+        new JdbcAnalysisProfileRepository(database).save(profile);
+        List<HistoricalBatchProgress> progress = new ArrayList<>();
+
+        try (HistoricalAnalysisService service =
+                     new HistoricalAnalysisService(
+                             receiver, profile, JAPAN,
+                             new AnalysisResultStore(database))) {
+            ReplayFrame displayed = service.load(first, ignored -> { })
+                    .get(5, TimeUnit.SECONDS);
+
+            HistoricalBatchResult saved = service.analyzeAndSaveBatch(
+                            List.of(second, first), true, progress::add)
+                    .get(10, TimeUnit.SECONDS);
+
+            assertEquals(2, saved.savedDays());
+            assertEquals(0, saved.skippedDays());
+            assertEquals(0, saved.failedDays());
+            assertFalse(saved.cancelled());
+            JdbcAnalysisRunRepository runs =
+                    new JdbcAnalysisRunRepository(database);
+            assertTrue(runs.findEquivalent(
+                    DAY, selectionFingerprint(first), receiver.id(),
+                    profile.id()).isPresent());
+            assertTrue(runs.findEquivalent(
+                    nextDay, selectionFingerprint(second), receiver.id(),
+                    profile.id()).isPresent());
+            assertEquals(DAY, progress.getFirst().date());
+
+            ReplayFrame afterBatch = service.pause()
+                    .get(5, TimeUnit.SECONDS);
+            assertEquals(DAY, afterBatch.dataset().selection().date());
+            assertEquals(displayed.displayTime(), afterBatch.displayTime());
+
+            HistoricalBatchResult skipped = service.analyzeAndSaveBatch(
+                            List.of(first, second), true, ignored -> { })
+                    .get(10, TimeUnit.SECONDS);
+            assertEquals(0, skipped.savedDays());
+            assertEquals(2, skipped.skippedDays());
+            assertEquals(0, skipped.failedDays());
+        }
+    }
+
+    @Test
+    void batchContinuesAfterInvalidDayAndCanBeCancelled() throws Exception {
+        Path invalidLog = temporaryDirectory.resolve("invalid.ais");
+        Files.writeString(invalidLog, "not an AIS record\n",
+                StandardCharsets.UTF_8);
+        HistoricalDaySelection invalid = new HistoricalDaySelection(
+                DAY, List.of(invalidLog), false);
+        HistoricalDaySelection valid = selection(
+                "valid.ais", DAY.plusDays(1), "20260905");
+        SqliteDatabase database = configuredDatabase("continue.db");
+        ReceiverProfile receiver = receiver();
+        AnalysisProfile profile = AnalysisProfile.phaseOneDefaults();
+        new JdbcReceiverProfileRepository(database).save(receiver);
+        new JdbcAnalysisProfileRepository(database).save(profile);
+
+        try (HistoricalAnalysisService service =
+                     new HistoricalAnalysisService(
+                             receiver, profile, JAPAN,
+                             new AnalysisResultStore(database))) {
+            HistoricalBatchResult continued = service.analyzeAndSaveBatch(
+                            List.of(invalid, valid), true, ignored -> { })
+                    .get(10, TimeUnit.SECONDS);
+            assertEquals(1, continued.savedDays());
+            assertEquals(1, continued.failedDays());
+            assertEquals(DAY, continued.failures().getFirst().date());
+
+            HistoricalBatchResult cancelled = service.analyzeAndSaveBatch(
+                            List.of(invalid, valid), false, progress ->
+                                    service.cancelBatchAnalysis())
+                    .get(10, TimeUnit.SECONDS);
+            assertTrue(cancelled.cancelled());
+            assertEquals(0, cancelled.processedDays());
+            assertEquals(2, cancelled.unprocessedDays());
+        }
+    }
+
+    private HistoricalDaySelection selection(
+            String filename, LocalDate date, String compactDate)
+            throws Exception {
+        Path log = temporaryDirectory.resolve(filename);
+        Files.writeString(log,
+                line(compactDate + "090000000", 34.6000)
+                        + line(compactDate + "090010000", 34.6005)
+                        + line(compactDate + "090020000", 34.6010),
+                StandardCharsets.UTF_8);
+        return new HistoricalDaySelection(date, List.of(log), false);
+    }
+
+    private SqliteDatabase configuredDatabase(String filename) {
+        SqliteDatabase database = new SqliteDatabase(
+                temporaryDirectory.resolve(filename));
+        new SchemaMigrator(database).migrate();
+        return database;
     }
 
     private static String line(String timestamp, double latitude) {

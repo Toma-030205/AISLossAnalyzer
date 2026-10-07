@@ -11,7 +11,19 @@ public record AggregateRow(
         VesselClass vesselClass,
         MetricEvaluation evaluation,
         int observationDayCount,
-        int categoryOrder) {
+        int categoryOrder,
+        Integer hourOfDay) {
+
+    public AggregateRow(
+            String seriesLabel,
+            String categoryLabel,
+            VesselClass vesselClass,
+            MetricEvaluation evaluation,
+            int observationDayCount,
+            int categoryOrder) {
+        this(seriesLabel, categoryLabel, vesselClass, evaluation,
+                observationDayCount, categoryOrder, null);
+    }
 
     public AggregateRow {
         if (seriesLabel == null || seriesLabel.isBlank()
@@ -24,6 +36,10 @@ public record AggregateRow(
         if (observationDayCount < 0 || categoryOrder < 0) {
             throw new IllegalArgumentException(
                     "aggregate ordering values must not be negative");
+        }
+        if (hourOfDay != null && (hourOfDay < 0 || hourOfDay > 23)) {
+            throw new IllegalArgumentException(
+                    "hourOfDay must be between 0 and 23");
         }
     }
 

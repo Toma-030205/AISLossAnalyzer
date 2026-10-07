@@ -82,6 +82,7 @@ public final class JdbcAnalysisRunRepository
                AND input_file_count = ?
                AND receiver_profile_id = ?
                AND analysis_profile_id = ?
+               AND vessel_metric_ready = 1
                AND active = 1 AND status = 'COMPLETE'
             """ + (targetDate == null ? "" : " AND target_date = ?") + """
              ORDER BY ended_at DESC
@@ -218,9 +219,6 @@ public final class JdbcAnalysisRunRepository
                         WHERE fresh.id = ?
                           AND fresh.source_mode = 'HISTORICAL'
                           AND fresh.target_date = old.target_date
-                          AND fresh.input_sha256 = old.input_sha256
-                          AND fresh.input_uncompressed_bytes = old.input_uncompressed_bytes
-                          AND fresh.input_file_count = old.input_file_count
                           AND fresh.receiver_profile_id = old.receiver_profile_id
                           AND fresh.analysis_profile_id = old.analysis_profile_id)
                 """)) {

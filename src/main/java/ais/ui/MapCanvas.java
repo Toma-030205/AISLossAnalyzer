@@ -15,7 +15,10 @@ import ais.spatial.ProjectedPoint;
 import ais.spatial.Utm53NProjector;
 import ais.ui.viewmodel.GridMapItem;
 import ais.ui.viewmodel.MapViewModel;
+import ais.ui.viewmodel.SimulationOverlayViewModel;
+import ais.ui.viewmodel.SimulationTruthMapItem;
 import ais.ui.viewmodel.VesselMapItem;
+import ais.simulation.communication.ReceptionOutcome;
 
 import javax.swing.AbstractAction;
 import javax.swing.JComponent;
@@ -72,6 +75,7 @@ public final class MapCanvas extends JPanel {
     private final Utm53NProjector gridProjector = new Utm53NProjector();
 
     private MapViewModel viewModel;
+    private SimulationOverlayViewModel simulationOverlay;
     private Consumer<Integer> vesselSelection = ignored -> { };
     private Consumer<GridCellId> gridSelection = ignored -> { };
     private Runnable clearSelection = () -> { };
@@ -111,6 +115,12 @@ public final class MapCanvas extends JPanel {
 
     public void setViewModel(MapViewModel viewModel) {
         this.viewModel = viewModel;
+        repaint();
+    }
+
+    public void setSimulationOverlay(
+            SimulationOverlayViewModel simulationOverlay) {
+        this.simulationOverlay = simulationOverlay;
         repaint();
     }
 
@@ -198,6 +208,9 @@ public final class MapCanvas extends JPanel {
                 drawSelectedTrail(g);
                 if (showVessels) {
                     drawVessels(g);
+                }
+                if (simulationOverlay != null) {
+                    drawSimulationOverlay(g);
                 }
         drawLegend(g);
         if (exportRendering) {
@@ -396,9 +409,88 @@ public final class MapCanvas extends JPanel {
         }
     }
 
+    private void drawSimulationOverlay(Graphics2D g) {
+        for (SimulationTruthMapItem vessel
+                : simulationOverlay.truthVessels()) {
+            if (vessel.selected()
+                    && vessel.lastReceivedPosition() != null) {
+                ScreenPoint truth = screen(vessel.truthPosition());
+                ScreenPoint received = screen(vessel.lastReceivedPosition());
+                g.setColor(new Color(25, 125, 155, 190));
+                g.setStroke(new BasicStroke(
+                        1.8f,
+                        BasicStroke.CAP_ROUND,
+                        BasicStroke.JOIN_ROUND,
+                        10.0f,
+                        new float[]{7.0f, 5.0f},
+                        0.0f));
+                g.drawLine(
+                        (int) Math.round(received.x()),
+                        (int) Math.round(received.y()),
+                        (int) Math.round(truth.x()),
+                        (int) Math.round(truth.y()));
+            }
+            if (vessel.selected() && vessel.truthTrail().size() >= 2) {
+                Path2D trail = new Path2D.Double();
+                boolean first = true;
+                for (TrailPoint point : vessel.truthTrail()) {
+                    ScreenPoint screen = screen(point.position());
+                    if (first) {
+                        trail.moveTo(screen.x(), screen.y());
+                        first = false;
+                    } else {
+                        trail.lineTo(screen.x(), screen.y());
+                    }
+                }
+                g.setColor(new Color(0, 130, 165, 210));
+                g.setStroke(new BasicStroke(
+                        2.0f,
+                        BasicStroke.CAP_ROUND,
+                        BasicStroke.JOIN_ROUND,
+                        10.0f,
+                        new float[]{4.0f, 4.0f},
+                        0.0f));
+                g.draw(trail);
+            }
+
+            ScreenPoint point = screen(vessel.truthPosition());
+            Path2D symbol = vesselShape(
+                    point,
+                    vessel.directionDegrees() == null
+                            ? 0.0 : vessel.directionDegrees());
+            if (vessel.selected()) {
+                g.setColor(Color.WHITE);
+                g.setStroke(new BasicStroke(5.0f));
+                g.draw(symbol);
+            }
+            g.setColor(new Color(240, 255, 255, 155));
+            g.fill(symbol);
+            g.setColor(truthColor(vessel.lastOutcome()));
+            g.setStroke(new BasicStroke(
+                    2.2f,
+                    BasicStroke.CAP_ROUND,
+                    BasicStroke.JOIN_ROUND,
+                    10.0f,
+                    new float[]{5.0f, 3.0f},
+                    0.0f));
+            g.draw(symbol);
+        }
+    }
+
+    private static Color truthColor(ReceptionOutcome outcome) {
+        if (outcome == null || outcome == ReceptionOutcome.RECEIVED) {
+            return new Color(0, 120, 160);
+        }
+        return outcome == ReceptionOutcome.LOST
+                ? new Color(220, 105, 20)
+                : new Color(95, 100, 105);
+    }
+
     private void drawLegend(Graphics2D g) {
         int width = 242;
-        int height = legendExpanded ? 226 : 32;
+        int height = legendExpanded
+                ? simulationOverlay == null ? 226 : 252
+                : 32;
         int x = 12;
         int y = Math.max(12, getHeight() - height - 12);
         legendToggleBounds = new Rectangle(x, y, width, 30);
@@ -450,6 +542,13 @@ public final class MapCanvas extends JPanel {
         g.setColor(Color.DARK_GRAY);
         g.drawString(String.format("鮮度基準: %.0f倍",
                 viewModel.freshnessMultiplier()), x + 126, y + 207);
+        if (simulationOverlay != null) {
+            int simulationY = y + 231;
+            g.setColor(new Color(40, 60, 70));
+            g.drawString("▲ 受信位置", x + 10, simulationY);
+            g.setColor(new Color(0, 120, 160));
+            g.drawString("△ 真位置（破線）", x + 103, simulationY);
+        }
     }
 
     private static void drawLegendDot(Graphics2D g, int x, int y,
@@ -565,6 +664,11 @@ public final class MapCanvas extends JPanel {
         if (showVessels) {
             viewModel.vessels().forEach(vessel -> vesselPositions.put(
                     vessel.mmsi(), vessel.position()));
+        }
+        if (simulationOverlay != null) {
+            simulationOverlay.truthVessels().forEach(vessel ->
+                    vesselPositions.put(
+                            vessel.mmsi(), vessel.truthPosition()));
         }
         var vessel = hitTester.vesselAt(
                 point.x, point.y, vesselPositions, viewport,

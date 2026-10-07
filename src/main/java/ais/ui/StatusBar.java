@@ -2,6 +2,7 @@ package ais.ui;
 
 import ais.app.ReplayFrame;
 import ais.app.LiveFrame;
+import ais.app.SimulationFrame;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
@@ -52,6 +53,14 @@ public final class StatusBar extends JPanel {
         message.setText(text == null ? "" : text);
     }
 
+    public void showSimulationIdle() {
+        state.setText("シミュレーション・未選択");
+        time.setText("時刻 —");
+        processed.setText("送信0 / 受信0 / 欠落0");
+        vessels.setText("真位置 0隻");
+        diagnostics.setText("適用外 0");
+    }
+
     public void update(LiveFrame frame, int visibleVesselCount) {
         state.setText("リアルタイム・" + switch (frame.state()) {
             case IDLE -> "停止中";
@@ -72,6 +81,35 @@ public final class StatusBar extends JPanel {
         vessels.setText("表示 " + visibleVesselCount + "隻");
         diagnostics.setText(String.format("エラー%,d / 重複%,d",
                 frame.errorDiagnosticCount(), frame.duplicateCount()));
+        if (!frame.message().isBlank()) {
+            message.setText(frame.message());
+        }
+    }
+
+    public void update(
+            SimulationFrame frame,
+            int visibleTruthVesselCount) {
+        state.setText("シミュレーション・" + switch (frame.state()) {
+            case NO_FILE -> "未選択";
+            case LOADING -> "読込中";
+            case READY -> "準備完了";
+            case PLAYING -> "再生中";
+            case PAUSED -> "一時停止";
+            case SEEKING -> "再計算中";
+            case END -> "終端";
+            case ERROR -> "エラー";
+        });
+        time.setText(frame.displayTime() == null ? "時刻 —"
+                : "再生 " + TIME.format(
+                frame.displayTime().atZone(JAPAN)));
+        var counts = frame.diagnostics();
+        processed.setText(String.format(
+                "送信%,d / 受信%,d / 欠落%,d",
+                counts.processedTransmissionCount(),
+                counts.receivedCount(),
+                counts.lostCount()));
+        vessels.setText("真位置 " + visibleTruthVesselCount + "隻");
+        diagnostics.setText("適用外 " + counts.outOfModelCount());
         if (!frame.message().isBlank()) {
             message.setText(frame.message());
         }

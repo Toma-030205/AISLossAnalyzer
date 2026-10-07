@@ -18,6 +18,7 @@ public final class TopNavigationPanel extends JPanel {
     public enum Screen {
         HISTORY("過去ログ"),
         LIVE("リアルタイム"),
+        SIMULATION("シミュレーション"),
         AGGREGATE("集計"),
         RECEIVER("受信局設定"),
         SETTINGS("共通設定");
@@ -67,10 +68,12 @@ public final class TopNavigationPanel extends JPanel {
     public void setSwitchingEnabled(boolean enabled) {
         buttons.get(Screen.HISTORY).setEnabled(enabled);
         buttons.get(Screen.LIVE).setEnabled(enabled);
+        buttons.get(Screen.SIMULATION).setEnabled(enabled);
         buttons.get(Screen.AGGREGATE).setEnabled(enabled);
-        String tip = enabled ? null : "受信を停止してから切り替えてください";
+        String tip = enabled ? null : "実行中の処理を終了してから切り替えてください";
         buttons.get(Screen.HISTORY).setToolTipText(tip);
         buttons.get(Screen.LIVE).setToolTipText(tip);
+        buttons.get(Screen.SIMULATION).setToolTipText(tip);
         buttons.get(Screen.AGGREGATE).setToolTipText(tip);
     }
 }

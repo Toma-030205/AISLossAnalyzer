@@ -35,6 +35,8 @@ public final class HistoricalControlPanel extends JPanel {
     private final JButton play = new JButton("再生");
     private final JButton restart = new JButton("先頭へ戻る");
     private final JButton analyze = new JButton("一日分を解析して保存");
+    private final JButton batchAnalyze =
+            new JButton("期間を一括解析・保存…");
     private final JButton csv = new JButton("現在の表をCSV保存");
     private final JButton chart = new JButton("現在のグラフを保存");
     private final JComboBox<ReplaySpeed> speed =
@@ -45,6 +47,8 @@ public final class HistoricalControlPanel extends JPanel {
     private Instant start;
     private Instant end;
     private boolean programmaticSlider;
+    private boolean busy;
+    private boolean batchRunning;
 
     public HistoricalControlPanel(List<LocalDate> dates,
                                   Listener listener) {
@@ -80,14 +84,14 @@ public final class HistoricalControlPanel extends JPanel {
         add(playback);
         JPanel saveRow = row();
         saveRow.add(analyze);
+        saveRow.add(batchAnalyze);
         add(saveRow);
         JPanel exportRow = row();
         exportRow.add(csv);
         exportRow.add(chart);
         add(exportRow);
 
-        load.setEnabled(!dates.isEmpty());
-        setReplayActionsEnabled(false);
+        updateEnabledState();
         load.addActionListener(event -> {
             LocalDate selected = (LocalDate) date.getSelectedItem();
             if (selected != null) {
@@ -98,6 +102,13 @@ public final class HistoricalControlPanel extends JPanel {
         play.addActionListener(event -> listener.onPlayPause());
         restart.addActionListener(event -> listener.onRestart());
         analyze.addActionListener(event -> listener.onAnalyzeAndSave());
+        batchAnalyze.addActionListener(event -> {
+            if (batchRunning) {
+                listener.onCancelBatch();
+            } else {
+                listener.onAnalyzeRange();
+            }
+        });
         csv.addActionListener(event -> listener.onExportCsv());
         chart.addActionListener(event -> listener.onExportChart());
         slider.addChangeListener(event -> {
@@ -141,7 +152,7 @@ public final class HistoricalControlPanel extends JPanel {
                     frame.dataset().inputRecordCount()));
             timeSummary.setText(format(frame.displayTime())
                     + " / " + format(end));
-            setReplayActionsEnabled(true);
+            updateEnabledState();
         }
     }
 
@@ -150,26 +161,43 @@ public final class HistoricalControlPanel extends JPanel {
     }
 
     public void setBusy(boolean busy) {
-        date.setEnabled(!busy);
-        load.setEnabled(!busy && date.getItemCount() > 0);
-        direct.setEnabled(!busy);
-        play.setEnabled(!busy && start != null);
-        restart.setEnabled(!busy && start != null);
-        speed.setEnabled(!busy && start != null);
-        slider.setEnabled(!busy && start != null);
-        analyze.setEnabled(!busy && start != null);
-        csv.setEnabled(!busy && start != null);
-        chart.setEnabled(!busy && start != null);
+        this.busy = busy;
+        updateEnabledState();
     }
 
-    private void setReplayActionsEnabled(boolean enabled) {
-        play.setEnabled(enabled);
-        restart.setEnabled(enabled);
-        speed.setEnabled(enabled);
-        slider.setEnabled(enabled);
-        analyze.setEnabled(enabled);
-        csv.setEnabled(enabled);
-        chart.setEnabled(enabled);
+    public void setBatchRunning(boolean running) {
+        batchRunning = running;
+        batchAnalyze.setText(running
+                ? "一括処理を中止" : "期間を一括解析・保存…");
+        updateEnabledState();
+    }
+
+    public void setBatchCancellationRequested() {
+        if (batchRunning) {
+            batchAnalyze.setText("中止中…");
+            batchAnalyze.setEnabled(false);
+        }
+    }
+
+    public LocalDate selectedDate() {
+        return (LocalDate) date.getSelectedItem();
+    }
+
+    private void updateEnabledState() {
+        boolean interactive = !busy && !batchRunning;
+        boolean hasReplay = start != null;
+        date.setEnabled(interactive);
+        load.setEnabled(interactive && date.getItemCount() > 0);
+        direct.setEnabled(interactive);
+        play.setEnabled(interactive && hasReplay);
+        restart.setEnabled(interactive && hasReplay);
+        speed.setEnabled(interactive && hasReplay);
+        slider.setEnabled(interactive && hasReplay);
+        analyze.setEnabled(interactive && hasReplay);
+        csv.setEnabled(interactive && hasReplay);
+        chart.setEnabled(interactive && hasReplay);
+        batchAnalyze.setEnabled(batchRunning
+                || (!busy && date.getItemCount() > 0));
     }
 
     private void chooseDirectFile() {
@@ -213,6 +241,10 @@ public final class HistoricalControlPanel extends JPanel {
         void onSeek(Instant time);
 
         void onAnalyzeAndSave();
+
+        void onAnalyzeRange();
+
+        void onCancelBatch();
 
         void onExportCsv();
 

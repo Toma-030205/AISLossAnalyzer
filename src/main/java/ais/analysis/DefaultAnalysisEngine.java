@@ -6,6 +6,7 @@ import ais.domain.NormalizedAisEvent;
 import ais.domain.PositionReport;
 import ais.domain.VesselMetadata;
 import ais.domain.VesselMetadataUpdate;
+import ais.domain.VesselClass;
 import ais.spatial.CoordinateProjector;
 import ais.spatial.DistanceCalculator;
 import ais.spatial.HaversineDistanceCalculator;
@@ -100,6 +101,16 @@ public final class DefaultAnalysisEngine implements AnalysisEngine {
         Objects.requireNonNull(resumedAt, "resumedAt");
         intervalCursors.resetForPause();
         vesselStates.resetContinuity();
+    }
+
+    @Override
+    public void resetVesselContinuity(
+            int mmsi,
+            VesselClass vesselClass,
+            IntervalExclusionReason nextReason) {
+        requireRunning();
+        intervalCursors.resetVessel(mmsi, vesselClass, nextReason);
+        vesselStates.resetContinuity(mmsi);
     }
 
     @Override

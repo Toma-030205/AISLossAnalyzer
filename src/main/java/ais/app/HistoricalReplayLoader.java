@@ -31,6 +31,13 @@ public final class HistoricalReplayLoader {
     public HistoricalReplayDataset load(
             HistoricalDaySelection selection,
             ProgressListener progress) throws IOException {
+        return load(selection, null, progress);
+    }
+
+    public HistoricalReplayDataset load(
+            HistoricalDaySelection selection,
+            InputFingerprint precomputedFingerprint,
+            ProgressListener progress) throws IOException {
         Objects.requireNonNull(selection, "selection");
         ProgressListener listener = progress == null
                 ? ignored -> { } : progress;
@@ -83,13 +90,18 @@ public final class HistoricalReplayLoader {
         events.sort(Comparator
                 .comparing(NormalizedAisEvent::receivedAt)
                 .thenComparingLong(NormalizedAisEvent::sequence));
-        InputFingerprint fingerprint = new InputFingerprintCalculator()
-                .calculate(selection.files());
+        listener.onProgress(records);
+        if (Thread.currentThread().isInterrupted()) {
+            throw new IOException("historical replay loading cancelled");
+        }
+        InputFingerprint fingerprint = precomputedFingerprint == null
+                ? new InputFingerprintCalculator()
+                        .calculate(selection.files())
+                : precomputedFingerprint;
         Instant start = events.isEmpty()
                 ? null : events.getFirst().receivedAt();
         Instant end = events.isEmpty()
                 ? null : events.getLast().receivedAt();
-        listener.onProgress(records);
         return new HistoricalReplayDataset(
                 selection, fingerprint, events, diagnostics,
                 records, start, end);

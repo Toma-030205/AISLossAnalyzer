@@ -18,7 +18,21 @@ public record AggregateRequest(
         HeatmapMetric metric,
         ReceiverProfileId receiverProfileId,
         AnalysisProfileId analysisProfileId,
-        AggregateAxis axis) {
+        AggregateAxis axis,
+        Set<LocalDate> excludedDates) {
+
+    public AggregateRequest(
+            LocalDate startDate,
+            LocalDate endDate,
+            RollupDimension dimension,
+            Set<VesselClass> vesselClasses,
+            HeatmapMetric metric,
+            ReceiverProfileId receiverProfileId,
+            AnalysisProfileId analysisProfileId,
+            AggregateAxis axis) {
+        this(startDate, endDate, dimension, vesselClasses, metric,
+                receiverProfileId, analysisProfileId, axis, Set.of());
+    }
 
     public AggregateRequest {
         Objects.requireNonNull(startDate, "startDate");
@@ -29,6 +43,7 @@ public record AggregateRequest(
         Objects.requireNonNull(receiverProfileId, "receiverProfileId");
         Objects.requireNonNull(analysisProfileId, "analysisProfileId");
         Objects.requireNonNull(axis, "axis");
+        excludedDates = Set.copyOf(excludedDates);
         if (endDate.isBefore(startDate)) {
             throw new IllegalArgumentException(
                     "終了日は開始日以降にしてください");
@@ -37,6 +52,11 @@ public record AggregateRequest(
                 || vesselClasses.contains(VesselClass.UNKNOWN)) {
             throw new IllegalArgumentException(
                     "Class AまたはClass Bを選択してください");
+        }
+        if (excludedDates.stream().anyMatch(date ->
+                date.isBefore(startDate) || date.isAfter(endDate))) {
+            throw new IllegalArgumentException(
+                    "除外日は集計期間内で指定してください");
         }
     }
 }

@@ -5,6 +5,7 @@ import ais.app.ApplicationContext;
 import javax.swing.JFrame;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTabbedPane;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
@@ -22,6 +23,12 @@ public final class MainFrame extends JFrame {
     private final ApplicationContext applicationContext;
     private final MapScreenPanel mapScreen;
     private final AggregateScreenPanel aggregateScreen;
+    private final ShipLengthAnalysisPanel shipLengthPanel;
+    private final ShipLengthPerformancePanel shipLengthPerformancePanel;
+    private final DailyDataQualityPanel dataQualityPanel;
+    private final CommunicationModelPanel communicationModelPanel;
+    private final ValidationPanel validationPanel;
+    private final JTabbedPane aggregateTabs = new JTabbedPane();
     private final TopNavigationPanel navigation;
     private final JPanel content = new JPanel(new CardLayout());
 
@@ -41,6 +48,7 @@ public final class MainFrame extends JFrame {
                 applicationContext.historicalFilesByDate(),
                 applicationContext.historicalAnalysisService(),
                 applicationContext.liveAnalysisService(),
+                applicationContext.simulationPlaybackService(),
                 applicationContext.exportService(),
                 statusBar);
         LocalDate initialDate = applicationContext.historicalFilesByDate()
@@ -52,13 +60,47 @@ public final class MainFrame extends JFrame {
                 applicationContext.receiverProfile(),
                 applicationContext.analysisProfile(),
                 initialDate, statusBar);
+        dataQualityPanel = new DailyDataQualityPanel(
+                applicationContext.aggregateQueryService(),
+                applicationContext.exportService(),
+                applicationContext.receiverProfile(),
+                applicationContext.analysisProfile(),
+                initialDate, statusBar);
+        shipLengthPanel = new ShipLengthAnalysisPanel(
+                applicationContext.aggregateQueryService(),
+                applicationContext.exportService(),
+                applicationContext.receiverProfile(),
+                applicationContext.analysisProfile(),
+                initialDate, statusBar);
+        shipLengthPerformancePanel = new ShipLengthPerformancePanel(
+                applicationContext.aggregateQueryService(),
+                applicationContext.exportService(),
+                applicationContext.receiverProfile(),
+                applicationContext.analysisProfile(),
+                initialDate, statusBar);
+        communicationModelPanel = new CommunicationModelPanel(
+                applicationContext.communicationModelService(),
+                applicationContext.exportService(),
+                applicationContext.receiverProfile(),
+                applicationContext.analysisProfile(),
+                initialDate, statusBar);
+        validationPanel = new ValidationPanel(
+                applicationContext.simulationValidationService(),
+                applicationContext.exportService(), statusBar);
+        aggregateTabs.addTab("性能集計", aggregateScreen);
+        aggregateTabs.addTab("船体長別性能", shipLengthPerformancePanel);
+        aggregateTabs.addTab("船体長別分析", shipLengthPanel);
+        aggregateTabs.addTab("日別データ品質", dataQualityPanel);
+        aggregateTabs.addTab("通信モデル", communicationModelPanel);
+        aggregateTabs.addTab("妥当性確認", validationPanel);
+        aggregateTabs.addChangeListener(event -> refreshAggregateTab());
         navigation = new TopNavigationPanel(
                 applicationContext.receiverProfile().name(),
                 this::navigate);
         mapScreen.setLiveActivityListener(
                 receiving -> navigation.setSwitchingEnabled(!receiving));
         content.add(mapScreen, MAP_CARD);
-        content.add(aggregateScreen, AGGREGATE_CARD);
+        content.add(aggregateTabs, AGGREGATE_CARD);
         add(navigation, BorderLayout.NORTH);
         add(content, BorderLayout.CENTER);
         add(statusBar, BorderLayout.SOUTH);
@@ -85,10 +127,14 @@ public final class MainFrame extends JFrame {
                 mapScreen.setMode(MapScreenPanel.Mode.LIVE);
                 cards.show(content, MAP_CARD);
             }
+            case SIMULATION -> {
+                mapScreen.setMode(MapScreenPanel.Mode.SIMULATION);
+                cards.show(content, MAP_CARD);
+            }
             case AGGREGATE -> {
                 mapScreen.stopPlayback();
                 cards.show(content, AGGREGATE_CARD);
-                aggregateScreen.refreshIfEmpty();
+                refreshAggregateTab();
             }
             case RECEIVER, SETTINGS -> {
                 // These buttons remain disabled until their later iteration.
@@ -96,8 +142,41 @@ public final class MainFrame extends JFrame {
         }
     }
 
+    private void refreshAggregateTab() {
+        if (aggregateTabs.getSelectedComponent() == dataQualityPanel) {
+            dataQualityPanel.refreshIfEmpty();
+        } else if (aggregateTabs.getSelectedComponent() == shipLengthPanel) {
+            shipLengthPanel.refreshIfEmpty();
+        } else if (aggregateTabs.getSelectedComponent()
+                == shipLengthPerformancePanel) {
+            shipLengthPerformancePanel.refreshIfEmpty();
+        } else if (aggregateTabs.getSelectedComponent()
+                == communicationModelPanel) {
+            communicationModelPanel.refreshIfEmpty();
+        } else if (aggregateTabs.getSelectedComponent()
+                == validationPanel) {
+            validationPanel.refreshIfEmpty();
+        } else {
+            aggregateScreen.refreshIfEmpty();
+        }
+    }
+
     private void requestClose() {
         mapScreen.stopPlayback();
+        if (mapScreen.isHistoricalBatchRunning()) {
+            int answer = JOptionPane.showConfirmDialog(
+                    this,
+                    "期間の一括解析を中止しますか？\n"
+                            + "保存が完了した日付の結果は残ります。"
+                            + "中止完了後に、もう一度終了してください。",
+                    "一括解析の中止",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (answer == JOptionPane.OK_OPTION) {
+                mapScreen.cancelHistoricalBatch();
+            }
+            return;
+        }
         if (!mapScreen.isLiveReceiving()) {
             finishClose();
             return;

@@ -46,6 +46,8 @@ class SqliteStorageTest {
             Instant.parse("2025-06-01T00:05:00Z");
     private static final InputFingerprint FINGERPRINT =
             new InputFingerprint("ab".repeat(32), 12_345, 1);
+    private static final InputFingerprint CHANGED_FINGERPRINT =
+            new InputFingerprint("cd".repeat(32), 23_456, 2);
 
     @TempDir
     Path temporaryDirectory;
@@ -80,6 +82,97 @@ class SqliteStorageTest {
             assertTrue(foreignKeys.next());
             assertEquals(1, foreignKeys.getInt(1));
         }
+    }
+
+    @Test
+    void versionFourAndFiveMigrateFromVersionThree()
+            throws Exception {
+        try (Connection connection = database.open();
+                Statement statement = connection.createStatement()) {
+            dropVersionFiveTables(statement);
+            statement.execute("DROP TABLE communication_model_parameter");
+            statement.execute("DROP TABLE communication_model_source_run");
+            statement.execute(
+                    "DROP TABLE communication_model_excluded_date");
+            statement.execute("DROP TABLE communication_model");
+            statement.executeUpdate(
+                    "DELETE FROM schema_version WHERE version >= 4");
+        }
+        SchemaMigrator migrator = new SchemaMigrator(database);
+        assertEquals(3, migrator.currentVersion());
+
+        migrator.migrate();
+
+        assertEquals(SchemaMigrator.CURRENT_VERSION,
+                migrator.currentVersion());
+        try (Connection connection = database.open();
+                Statement statement = connection.createStatement();
+                ResultSet tables = statement.executeQuery("""
+                        SELECT COUNT(*)
+                          FROM sqlite_master
+                         WHERE type = 'table'
+                           AND name IN (
+                               'communication_model',
+                               'communication_model_excluded_date',
+                               'communication_model_source_run',
+                               'communication_model_parameter')
+                        """)) {
+            assertTrue(tables.next());
+            assertEquals(4, tables.getInt(1));
+        }
+    }
+
+    @Test
+    void versionTwoBackfillsHourlyDistancePresence() throws Exception {
+        AnalysisRun run = run(AnalysisRunId.create());
+        new AnalysisResultStore(database).replaceCompletedRun(
+                run, summary(run, snapshot(4, 2)), List.of(), List.of());
+        try (Connection connection = database.open();
+                Statement statement = connection.createStatement()) {
+            dropVersionFiveTables(statement);
+            statement.execute("DROP TABLE communication_model_parameter");
+            statement.execute("DROP TABLE communication_model_source_run");
+            statement.execute(
+                    "DROP TABLE communication_model_excluded_date");
+            statement.execute("DROP TABLE communication_model");
+            statement.execute("DROP TABLE distance_vessel_presence_hour");
+            statement.execute("DROP TABLE distance_vessel_metric_day");
+            statement.execute(
+                    "ALTER TABLE analysis_run DROP COLUMN vessel_metric_ready");
+            statement.executeUpdate(
+                    "DELETE FROM schema_version WHERE version >= 2");
+        }
+
+        SchemaMigrator migrator = new SchemaMigrator(database);
+        migrator.migrate();
+
+        try (Connection connection = database.open();
+                Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery("""
+                        SELECT observed_date, hour_of_day,
+                               distance_band_index, vessel_class, mmsi
+                          FROM distance_vessel_presence_hour
+                        """)) {
+            assertTrue(rows.next());
+            assertEquals("2025-06-01", rows.getString("observed_date"));
+            assertEquals(9, rows.getInt("hour_of_day"));
+            assertEquals(6, rows.getInt("distance_band_index"));
+            assertEquals("CLASS_B", rows.getString("vessel_class"));
+            assertEquals(431000003, rows.getInt("mmsi"));
+            assertFalse(rows.next());
+        }
+    }
+
+    private static void dropVersionFiveTables(Statement statement)
+            throws Exception {
+        statement.execute("DROP TABLE simulation_validation_summary");
+        statement.execute("DROP TABLE simulation_validation_cell");
+        statement.execute("DROP TABLE simulation_distance_metric");
+        statement.execute("DROP TABLE simulation_run");
+        statement.execute("DROP TABLE simulation_experiment_source_run");
+        statement.execute(
+                "DROP TABLE simulation_experiment_excluded_date");
+        statement.execute("DROP TABLE simulation_experiment");
     }
 
     @Test
@@ -179,6 +272,39 @@ class SqliteStorageTest {
     }
 
     @Test
+    void changedHistoricalInputSupersedesSameDayAndProfiles() {
+        AnalysisResultStore resultStore = new AnalysisResultStore(database);
+        JdbcAnalysisRunRepository runs =
+                new JdbcAnalysisRunRepository(database);
+        AnalysisRun original = run(AnalysisRunId.create());
+        resultStore.replaceCompletedRun(original,
+                summary(original, snapshot(4, 1)), List.of(), List.of());
+
+        AnalysisRun revised = new AnalysisRun(
+                AnalysisRunId.create(), SourceMode.HISTORICAL,
+                original.targetDate(), "2025-06-01-revised.log",
+                CHANGED_FINGERPRINT, receiver.id(), profile.id(), START);
+        resultStore.replaceCompletedRun(revised,
+                summary(revised, snapshot(8, 2)), List.of(), List.of());
+
+        StoredAnalysisRun old = runs.findById(original.id()).orElseThrow();
+        StoredAnalysisRun current = runs.findById(revised.id()).orElseThrow();
+        assertEquals(AnalysisRunStatus.SUPERSEDED, old.status());
+        assertFalse(old.active());
+        assertEquals(AnalysisRunStatus.COMPLETE, current.status());
+        assertTrue(current.active());
+        assertTrue(runs.findEquivalent(original.targetDate(), FINGERPRINT,
+                receiver.id(), profile.id()).isEmpty());
+        assertEquals(revised.id(), runs.findEquivalent(
+                revised.targetDate(), CHANGED_FINGERPRINT, receiver.id(),
+                profile.id()).orElseThrow().run().id());
+        assertEquals(List.of(revised), runs.findCompleted(
+                        null, null, receiver.id(), profile.id()).stream()
+                .map(StoredAnalysisRun::run)
+                .toList());
+    }
+
+    @Test
     void aggregateQueryCanRestrictTimeAndVesselClass() {
         AnalysisRun run = run(AnalysisRunId.create());
         AggregationSnapshot snapshot = snapshot(4, 2);
@@ -220,7 +346,8 @@ class SqliteStorageTest {
         new JdbcAnalysisProfileRepository(database).save(alternate);
         AnalysisRun alternateRun = new AnalysisRun(
                 AnalysisRunId.create(), SourceMode.HISTORICAL,
-                original.targetDate(), original.inputName(), FINGERPRINT,
+                original.targetDate(), original.inputName(),
+                CHANGED_FINGERPRINT,
                 receiver.id(), alternate.id(), START);
         AnalysisRunSummary alternateSummary = new AnalysisRunSummary(
                 new AnalysisContext(receiver, alternate,
@@ -236,8 +363,8 @@ class SqliteStorageTest {
                 original.targetDate(), FINGERPRINT, receiver.id(),
                 profile.id()).orElseThrow().run().id());
         assertEquals(alternateRun.id(), runs.findEquivalent(
-                alternateRun.targetDate(), FINGERPRINT, receiver.id(),
-                alternate.id()).orElseThrow().run().id());
+                alternateRun.targetDate(), CHANGED_FINGERPRINT,
+                receiver.id(), alternate.id()).orElseThrow().run().id());
     }
 
     @Test

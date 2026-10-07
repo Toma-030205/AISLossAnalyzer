@@ -4,6 +4,7 @@ import ais.aggregate.InsufficientDataReason;
 import ais.aggregate.MetricCounts;
 import ais.app.AggregateResult;
 import ais.app.AggregateRow;
+import ais.app.AggregateAxis;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -35,7 +36,14 @@ public final class CsvExporter {
                 writer.newLine();
                 writer.write("# 解析実行数: " + result.analysisRunCount());
                 writer.newLine();
-                writer.write("系列,区分,Class,observed,missing,expected,"
+                boolean distanceHour = result.request().axis()
+                        == AggregateAxis.DISTANCE_BY_HOUR;
+                writer.write(distanceHour
+                        ? "時間帯,距離帯,Class,observed,missing,expected,"
+                        + "loss_rate_percent,observed_seconds,stale_seconds,"
+                        + "freshness_violation_rate_percent,異なる船舶数,"
+                        + "当該区分の観測日数,データ判定"
+                        : "系列,区分,Class,observed,missing,expected,"
                         + "loss_rate_percent,observed_seconds,stale_seconds,"
                         + "freshness_violation_rate_percent,異なる船舶数,"
                         + "観測日数,データ判定");
@@ -43,7 +51,9 @@ public final class CsvExporter {
                 for (AggregateRow row : result.rows()) {
                     MetricCounts counts = row.evaluation().counts();
                     writer.write(String.join(",",
-                            csv(row.seriesLabel()),
+                            csv(distanceHour
+                                    ? String.format("%02d時", row.hourOfDay())
+                                    : row.seriesLabel()),
                             csv(row.categoryLabel()),
                             csv(classLabel(row)),
                             Long.toString(counts.observedCount()),

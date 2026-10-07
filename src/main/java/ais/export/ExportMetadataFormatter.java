@@ -7,6 +7,7 @@ public final class ExportMetadataFormatter {
     public String summary(AggregateResult result) {
         return "期間（日本時間）: " + result.request().startDate() + "～"
                 + result.request().endDate()
+                + excludedDates(result.request().excludedDates())
                 + " / 指標: " + result.request().metric()
                 + " / Class: " + classLabel(result)
                 + " / 集計単位: " + dimensionLabel(result)
@@ -14,6 +15,18 @@ public final class ExportMetadataFormatter {
                 + " / 受信局: " + result.receiverProfile().name()
                 + " / 解析条件: "
                 + result.analysisProfile().rulesVersion();
+    }
+
+    public static String excludedDates(
+            java.util.Set<java.time.LocalDate> dates) {
+        if (dates.isEmpty()) {
+            return "";
+        }
+        String values = dates.stream()
+                .sorted()
+                .map(Object::toString)
+                .collect(java.util.stream.Collectors.joining(", "));
+        return " / 除外日: " + values;
     }
 
     public String classLabel(AggregateResult result) {
@@ -28,6 +41,10 @@ public final class ExportMetadataFormatter {
     }
 
     private static String dimensionLabel(AggregateResult result) {
+        if (result.request().axis()
+                != ais.app.AggregateAxis.DISTANCE_BAND) {
+            return "選択期間全体";
+        }
         return switch (result.request().dimension()) {
             case DAY -> "日別";
             case DAY_OF_WEEK -> "曜日別";

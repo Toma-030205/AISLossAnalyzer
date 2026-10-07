@@ -15,6 +15,7 @@ import java.awt.Font;
 import java.awt.FlowLayout;
 import java.time.Duration;
 import java.util.Set;
+import java.util.function.Consumer;
 
 public final class DisplayOptionsPanel extends JPanel {
 
@@ -27,6 +28,9 @@ public final class DisplayOptionsPanel extends JPanel {
     private final JCheckBox thirtyKilometers = new JCheckBox("30km圏", true);
     private final JCheckBox receiver = new JCheckBox("受信局", true);
     private final JCheckBox vessels = new JCheckBox("船舶記号", true);
+    private final JCheckBox simulationTruth =
+            new JCheckBox("シミュレーション真位置", true);
+    private Consumer<Boolean> truthVisibilityListener = ignored -> { };
 
     public DisplayOptionsPanel(Listener listener) {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -50,9 +54,12 @@ public final class DisplayOptionsPanel extends JPanel {
         add(layers1);
         enlarge(receiver);
         enlarge(vessels);
+        enlarge(simulationTruth);
+        simulationTruth.setVisible(false);
         JPanel layers2 = row();
         layers2.add(receiver);
         layers2.add(vessels);
+        layers2.add(simulationTruth);
         add(layers2);
         JPanel trailRow = row();
         JLabel trailLabel = new JLabel("選択航跡:");
@@ -72,6 +79,9 @@ public final class DisplayOptionsPanel extends JPanel {
         thirtyKilometers.addActionListener(event -> notifyLayers(listener));
         receiver.addActionListener(event -> notifyLayers(listener));
         vessels.addActionListener(event -> notifyLayers(listener));
+        simulationTruth.addActionListener(event ->
+                truthVisibilityListener.accept(
+                        simulationTruth.isSelected()));
         setMaximumSize(new Dimension(
                 Integer.MAX_VALUE, getPreferredSize().height));
     }
@@ -85,6 +95,21 @@ public final class DisplayOptionsPanel extends JPanel {
         TrailChoice selected = (TrailChoice) trail.getSelectedItem();
         return selected == null
                 ? Duration.ofMinutes(60) : selected.duration;
+    }
+
+    public void setSimulationMode(boolean simulationMode) {
+        simulationTruth.setVisible(simulationMode);
+        revalidate();
+        repaint();
+    }
+
+    public void setTruthVisibilityListener(Consumer<Boolean> listener) {
+        truthVisibilityListener = listener == null
+                ? ignored -> { } : listener;
+    }
+
+    public boolean isTruthVisible() {
+        return simulationTruth.isSelected();
     }
 
     private void notifyLayers(Listener listener) {

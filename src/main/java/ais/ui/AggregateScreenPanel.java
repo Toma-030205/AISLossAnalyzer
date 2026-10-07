@@ -42,6 +42,7 @@ public final class AggregateScreenPanel extends JPanel {
     private final StatusBar statusBar;
     private final JTextField startDate = new JTextField(10);
     private final JTextField endDate = new JTextField(10);
+    private final JTextField excludedDates = new JTextField(18);
     private final JComboBox<DimensionChoice> dimension =
             new JComboBox<>(DimensionChoice.values());
     private final JComboBox<ClassChoice> vesselClass =
@@ -91,6 +92,10 @@ public final class AggregateScreenPanel extends JPanel {
         conditions.add(startDate);
         conditions.add(new JLabel("～"));
         conditions.add(endDate);
+        conditions.add(new JLabel("除外日"));
+        excludedDates.setToolTipText(
+                "任意。例: 2025-11-03, 2025-11-04");
+        conditions.add(excludedDates);
         conditions.add(new JLabel("集計単位"));
         conditions.add(dimension);
         conditions.add(new JLabel("Class"));
@@ -127,10 +132,14 @@ public final class AggregateScreenPanel extends JPanel {
 
         display.addActionListener(event -> query());
         axis.addActionListener(event -> {
+            updateDimensionEnabled();
             if (current != null) {
                 query();
             }
         });
+        dimension.setToolTipText(
+                "時間帯別・距離帯×時間帯は選択期間全体を合算します");
+        updateDimensionEnabled();
         csv.addActionListener(event -> exportCsv());
         png.addActionListener(event -> exportPng());
         csv.setEnabled(false);
@@ -203,7 +212,8 @@ public final class AggregateScreenPanel extends JPanel {
                         : selectedReceiver.profile.id(),
                 selectedProfile == null ? defaultProfile.id()
                         : selectedProfile.profile.id(),
-                (AggregateAxis) axis.getSelectedItem());
+                (AggregateAxis) axis.getSelectedItem(),
+                ExcludedDateParser.parse(excludedDates.getText()));
     }
 
     private void exportCsv() {
@@ -266,12 +276,20 @@ public final class AggregateScreenPanel extends JPanel {
         display.setEnabled(!busy);
         startDate.setEnabled(!busy);
         endDate.setEnabled(!busy);
-        dimension.setEnabled(!busy);
+        excludedDates.setEnabled(!busy);
+        dimension.setEnabled(!busy
+                && axis.getSelectedItem() == AggregateAxis.DISTANCE_BAND);
         vesselClass.setEnabled(!busy);
         metric.setEnabled(!busy);
         axis.setEnabled(!busy);
         receiverProfile.setEnabled(!busy);
         analysisProfile.setEnabled(!busy);
+    }
+
+    private void updateDimensionEnabled() {
+        dimension.setEnabled(
+                axis.getSelectedItem() == AggregateAxis.DISTANCE_BAND
+                        && display.isEnabled());
     }
 
     private void selectReceiver(ais.domain.ReceiverProfileId id) {
@@ -351,9 +369,10 @@ public final class AggregateScreenPanel extends JPanel {
             extends AbstractTableModel {
 
         private static final String[] COLUMNS = {
-                "系列", "距離帯/時間", "Class", "欠落率%", "鮮度違反率%",
-                "受信", "欠落", "期待", "観測秒", "鮮度違反秒",
-                "船舶数", "観測日数", "データ判定"};
+                "系列", "距離帯/区分", "時間帯", "Class", "欠落率%",
+                "鮮度違反率%", "受信", "欠落", "期待", "観測秒",
+                "鮮度違反秒", "船舶数", "当該区分の観測日数",
+                "データ判定"};
         private List<AggregateRow> rows = List.of();
 
         private void setRows(List<AggregateRow> rows) {
@@ -378,7 +397,7 @@ public final class AggregateScreenPanel extends JPanel {
 
         @Override
         public Class<?> getColumnClass(int column) {
-            return column >= 3 && column <= 11 ? Number.class : String.class;
+            return column >= 4 && column <= 12 ? Number.class : String.class;
         }
 
         @Override
@@ -389,18 +408,20 @@ public final class AggregateScreenPanel extends JPanel {
             return switch (columnIndex) {
                 case 0 -> row.seriesLabel();
                 case 1 -> row.categoryLabel();
-                case 2 -> row.vesselClass() == VesselClass.CLASS_A
+                case 2 -> row.hourOfDay() == null ? ""
+                        : String.format("%02d時", row.hourOfDay());
+                case 3 -> row.vesselClass() == VesselClass.CLASS_A
                         ? "Class A" : "Class B";
-                case 3 -> evaluation.lossRatePercent();
-                case 4 -> evaluation.freshnessViolationRatePercent();
-                case 5 -> counts.observedCount();
-                case 6 -> counts.missingCount();
-                case 7 -> counts.expectedCount();
-                case 8 -> counts.observedSeconds();
-                case 9 -> counts.staleSeconds();
-                case 10 -> evaluation.distinctVesselCount();
-                case 11 -> row.observationDayCount();
-                case 12 -> evaluation.hasSufficientData()
+                case 4 -> evaluation.lossRatePercent();
+                case 5 -> evaluation.freshnessViolationRatePercent();
+                case 6 -> counts.observedCount();
+                case 7 -> counts.missingCount();
+                case 8 -> counts.expectedCount();
+                case 9 -> counts.observedSeconds();
+                case 10 -> counts.staleSeconds();
+                case 11 -> evaluation.distinctVesselCount();
+                case 12 -> row.observationDayCount();
+                case 13 -> evaluation.hasSufficientData()
                         ? "十分" : "データ不足";
                 default -> throw new IndexOutOfBoundsException(columnIndex);
             };

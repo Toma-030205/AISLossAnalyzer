@@ -358,7 +358,10 @@ public interface DiagnosticRepository {
 | `SchemaMigrator` | `schema_version`を使う順次DDL適用 |
 | `TransactionRunner` | commit/rollbackの共通化 |
 | `JdbcAnalysisRunRepository` | 解析実行と同一入力置換 |
-| `JdbcAggregateRepository` | 格子・距離帯・船舶出現の一括保存と検索 |
+| `JdbcAggregateRepository` | 格子・距離帯・日別/時間帯別船舶出現の一括保存とSQL側期間集計 |
+| `JdbcDailyDataQualityRepository` | 日別の解析枠、入力情報、診断、船舶数を一覧用に取得 |
+| `JdbcShipLengthAnalysisRepository` | 日・Class・MMSIごとの最遠解析距離帯と、その日までの最新非null船体長をSQL内で結合・集約 |
+| `JdbcShipLengthPerformanceRepository` | 日・距離帯・Class・MMSI別の欠落/鮮度分子分母と、その日までの最新非null船体長を結合し、船体長帯別性能をSQL集約 |
 | `JdbcReceiverProfileRepository` | 受信設備履歴 |
 | `JdbcAnalysisProfileRepository` | 解析条件版 |
 | `JdbcVesselMetadataRepository` | Type 5/24のMMSI別履歴 |
@@ -377,10 +380,11 @@ public interface DiagnosticRepository {
 | `AisLossAnalyzerApplication` | `main`、Swing EDT起動 |
 | `ApplicationContext` | 設定、リポジトリ、エンジン、各サービスの生成と配線 |
 | `ApplicationController` | 画面切替、終了可否、全体状態 |
-| `HistoricalAnalysisService` | 日付選択、読込、再生、シーク、全日解析保存の開始と状態管理 |
+| `HistoricalAnalysisService` | 日付選択、読込、再生、シーク、単日・複数日の全日解析保存、保存済み判定、協調中止の状態管理 |
 | `FullDayAnalysisJob` | 再生用エンジンとは別に一日分を日初から日末まで解析し、成功結果を保存するキャンセル可能処理 |
+| `HistoricalBatchProgress` / `HistoricalBatchResult` | 複数日解析の現在日・処理段階・件数と、保存・スキップ・失敗・未処理の完了要約 |
 | `LiveAnalysisService` | UDP開始、停止、再開、リセット、終了確定 |
-| `AggregateQueryService` | SQLite集計検索と画面用データ変換 |
+| `AggregateQueryService` | SQLite集計検索、距離帯×時間帯×Class集計、日別データ品質判定、船体長帯別の日別最遠解析距離分布・欠落/鮮度性能と画面用データ変換 |
 | `ReceiverProfileService` | 受信局設定の検証と有効期間管理 |
 | `ExportService` | 現在の表示条件を固定してCSV/PNG出力へ委譲 |
 | `OperationGuard` | 受信中の画面切替禁止、二重開始防止等 |
@@ -425,7 +429,10 @@ ApplicationState
 | `VesselDetailPanel` | 選択船の情報。絶対の最終受信日時は表示しない |
 | `GridCellDetailPanel` | 選択格子の率、分子分母、船舶数、データ不足 |
 | `MapLegendPanel` | 9色、データ不足、Class枠線、情報鮮度。折りたたみ可能 |
-| `AggregateScreenPanel` | 条件、表、距離帯・時間帯グラフ |
+| `AggregateScreenPanel` | 条件、表、距離帯・時間帯グラフ、距離帯×時間帯×Classヒートマップ |
+| `ShipLengthAnalysisPanel` | 期間・Class条件、船体長帯別の最遠解析距離ヒートマップと要約表、CSV/PNG出力 |
+| `ShipLengthPerformancePanel` | 期間・Class・指標条件、船体長×距離帯×Class別の欠落/鮮度ヒートマップと母数表、CSV/PNG出力、旧runの再解析案内 |
+| `DailyDataQualityPanel` | 指定期間の解析済み・未解析日、5分枠、診断を一覧表示しCSV出力 |
 | `ReceiverProfileScreenPanel` | 受信局履歴の編集 |
 | `SettingsScreenPanel` | データルート、SENC、SQLite、UDP初期値 |
 | `ErrorDialog` | 継続不能または詳細確認が必要なエラー |
@@ -471,6 +478,10 @@ ViewModelは`Color`、`JComponent`、JDBC型を含めない。色の対応はUI�
 | `CsvExporter` | 現在の表と解析条件をUTF-8 CSVへ出力 |
 | `ChartRenderer` | 距離帯別・時間帯別グラフを画面とPNGへ共通描画 |
 | `ChartPngExporter` | 現在のグラフをPNGへ保存 |
+| `ShipLengthCsvExporter` | 船体長帯別の要約と最遠解析距離帯分布、定義・注意事項を専用CSVへ出力 |
+| `ShipLengthHeatmapRenderer` / `ShipLengthChartPngExporter` | Class別の船体長×最遠解析距離帯ヒートマップを画面・PNGへ共通描画 |
+| `ShipLengthPerformanceCsvExporter` | 船体長×距離帯×Class別の両指標・分子分母・標本情報・再解析必要件数をCSVへ出力 |
+| `ShipLengthPerformanceHeatmapRenderer` / `ShipLengthPerformanceChartPngExporter` | Class別の船体長×距離帯性能ヒートマップを画面・PNGへ共通描画 |
 | `MapPngExporter` | 凡例を強制展開した地図をオフスクリーン描画 |
 | `ExportFileNamer` | 種別、期間、Class、指標を含む安全な初期ファイル名 |
 | `ExportMetadataFormatter` | 受信局、解析条件版、期間の注記を生成 |
@@ -702,6 +713,10 @@ sequenceDiagram
 2. 集計画面と距離帯・時間帯グラフを接続する。
 3. CSV、グラフPNG、凡例付き地図PNGを実装する。
 4. Windows PC上で長時間、容量、終了時保存を確認する。
+
+追加分析として、`JdbcShipLengthAnalysisRepository`はactiveかつCOMPLETEの`distance_vessel_presence_day`をDB内で日・Class・MMSI単位に集約し、最遠距離帯だけをJavaへ返す。船体長は観測日終了までの同一Class・MMSIの最新非null値を結合する。
+
+船体長別の欠落率・鮮度違反率は、解析コアが区間ごとの寄与を`DistanceVesselDayKey`へ加算し、`distance_vessel_metric_day`へ日・MMSI・距離帯・Class単位で保存する。`JdbcShipLengthPerformanceRepository`はこれを船体長履歴へ観測日基準で結合し、分子分母を船体長帯別に合算する。既存のClass別合算値は船体長へ按分しない。スキーマv3への移行だけでは旧runの事実を復元できないため、`vessel_metric_ready = 0`として再解析対象にし、再解析保存後だけ`1`へ更新する。
 
 各反復は「設計差分→実装→自動テスト→画面または実データ確認→利用者確認」で完了させる。
 

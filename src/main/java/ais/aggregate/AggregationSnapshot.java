@@ -12,15 +12,24 @@ import java.util.stream.Collectors;
 public record AggregationSnapshot(
         Map<AggregateKey<GridCellId>, AggregateMetric> gridMetrics,
         Map<AggregateKey<DistanceBand>, AggregateMetric> distanceMetrics,
-        long outsideDistanceRangeCount) {
+        long outsideDistanceRangeCount,
+        Map<DistanceVesselDayKey, MetricCounts> distanceVesselDayMetrics) {
 
     public AggregationSnapshot {
         gridMetrics = Map.copyOf(gridMetrics);
         distanceMetrics = Map.copyOf(distanceMetrics);
+        distanceVesselDayMetrics = Map.copyOf(distanceVesselDayMetrics);
         if (outsideDistanceRangeCount < 0) {
             throw new IllegalArgumentException(
                     "outside range count must not be negative");
         }
+    }
+
+    public AggregationSnapshot(
+            Map<AggregateKey<GridCellId>, AggregateMetric> gridMetrics,
+            Map<AggregateKey<DistanceBand>, AggregateMetric> distanceMetrics,
+            long outsideDistanceRangeCount) {
+        this(gridMetrics, distanceMetrics, outsideDistanceRangeCount, Map.of());
     }
 
     public static AggregationSnapshot empty() {
@@ -37,7 +46,13 @@ public record AggregationSnapshot(
         return new AggregationSnapshot(
                 filter(gridMetrics, vesselClasses),
                 filter(distanceMetrics, vesselClasses),
-                outsideDistanceRangeCount);
+                outsideDistanceRangeCount,
+                distanceVesselDayMetrics.entrySet().stream()
+                        .filter(entry -> vesselClasses.contains(
+                                entry.getKey().vesselClass()))
+                        .collect(Collectors.toUnmodifiableMap(
+                                Map.Entry::getKey,
+                                Map.Entry::getValue)));
     }
 
     private static <S> Map<AggregateKey<S>, AggregateMetric> filter(

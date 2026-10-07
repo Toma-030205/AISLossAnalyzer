@@ -19,6 +19,9 @@ import ais.map.MapFeatureType;
 import ais.ui.viewmodel.HeatmapMetric;
 import ais.ui.viewmodel.MapViewModel;
 import ais.ui.viewmodel.MapViewModelFactory;
+import ais.ui.viewmodel.SimulationOverlayViewModel;
+import ais.ui.viewmodel.SimulationTruthMapItem;
+import ais.simulation.communication.ReceptionOutcome;
 import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
@@ -71,6 +74,14 @@ class MapViewModelTest {
         MapCanvas canvas = new MapCanvas(mapDataset());
         canvas.setSize(900, 650);
         canvas.setViewModel(model);
+        canvas.setSimulationOverlay(new SimulationOverlayViewModel(
+                List.of(new SimulationTruthMapItem(
+                        431000001, VesselClass.CLASS_A,
+                        new GeoPosition(34.615, 135.21),
+                        92.0, START.plusSeconds(10), List.of(),
+                        new GeoPosition(34.61, 135.20),
+                        ReceptionOutcome.LOST, 0.75, true)),
+                null, "CM-E1 v1", 42L));
         BufferedImage image = new BufferedImage(
                 900, 650, BufferedImage.TYPE_INT_ARGB);
         canvas.paint(image.createGraphics());

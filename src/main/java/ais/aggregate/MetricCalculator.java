@@ -16,7 +16,16 @@ public final class MetricCalculator {
 
     public MetricEvaluation evaluate(AggregateMetric metric) {
         Objects.requireNonNull(metric, "metric");
-        MetricCounts counts = metric.counts();
+        return evaluate(metric.counts(), metric.distinctVesselCount());
+    }
+
+    public MetricEvaluation evaluate(MetricCounts counts,
+                                     int distinctVesselCount) {
+        Objects.requireNonNull(counts, "counts");
+        if (distinctVesselCount < 0) {
+            throw new IllegalArgumentException(
+                    "distinctVesselCount must not be negative");
+        }
         long expected = counts.expectedCount();
         Double lossRate = expected == 0
                 ? null
@@ -32,14 +41,13 @@ public final class MetricCalculator {
             reasons.add(
                     InsufficientDataReason.EXPECTED_COUNT_BELOW_MINIMUM);
         }
-        if (metric.distinctVesselCount()
-                < profile.minimumDistinctVessels()) {
+        if (distinctVesselCount < profile.minimumDistinctVessels()) {
             reasons.add(
                     InsufficientDataReason.DISTINCT_VESSELS_BELOW_MINIMUM);
         }
         return new MetricEvaluation(
                 counts,
-                metric.distinctVesselCount(),
+                distinctVesselCount,
                 lossRate,
                 freshnessRate,
                 Set.copyOf(reasons));

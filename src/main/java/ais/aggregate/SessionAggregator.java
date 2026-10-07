@@ -35,6 +35,7 @@ public final class SessionAggregator {
     private final DistanceBandDefinition distanceBands;
     private final DistanceSegmentAllocator distanceAllocator;
     private final FiveMinuteBucketizer bucketizer;
+    private final DistanceVesselMetricAccumulator distanceVesselDayMetrics;
     private final GridMetricAccumulator gridMetrics =
             new GridMetricAccumulator();
     private final DistanceMetricAccumulator distanceMetrics =
@@ -83,6 +84,8 @@ public final class SessionAggregator {
                 distanceCalculator,
                 receiverPosition);
         bucketizer = new FiveMinuteBucketizer(aggregationZone);
+        distanceVesselDayMetrics = new DistanceVesselMetricAccumulator(
+                aggregationZone);
     }
 
     public void accept(AnalyzedInterval interval) {
@@ -116,12 +119,14 @@ public final class SessionAggregator {
         return new AggregationSnapshot(
                 gridMetrics.snapshot(),
                 distanceMetrics.snapshot(),
-                outsideDistanceRangeCount);
+                outsideDistanceRangeCount,
+                distanceVesselDayMetrics.snapshot());
     }
 
     public void clear() {
         gridMetrics.clear();
         distanceMetrics.clear();
+        distanceVesselDayMetrics.clear();
         outsideDistanceRangeCount = 0;
     }
 
@@ -153,6 +158,9 @@ public final class SessionAggregator {
                                 vesselClass,
                                 mmsi),
                         () -> outsideDistanceRangeCount++);
+        distanceBands.bandFor(distanceKilometers).ifPresent(
+                band -> distanceVesselDayMetrics.addObserved(
+                        at, band, vesselClass, mmsi));
     }
 
     private void addMissing(
@@ -178,6 +186,9 @@ public final class SessionAggregator {
                                 vesselClass,
                                 mmsi),
                         () -> outsideDistanceRangeCount++);
+        distanceBands.bandFor(distance).ifPresent(
+                band -> distanceVesselDayMetrics.addMissing(
+                        at, band, vesselClass, mmsi));
     }
 
     private void allocateGridDuration(
@@ -216,6 +227,13 @@ public final class SessionAggregator {
                     allocation.startAt(),
                     allocation.endAt())) {
                 distanceMetrics.addDuration(
+                        time.bucketStart(),
+                        allocation.band(),
+                        vesselClass,
+                        mmsi,
+                        time.seconds(),
+                        staleSeconds(time, interval.freshness().staleStart()));
+                distanceVesselDayMetrics.addDuration(
                         time.bucketStart(),
                         allocation.band(),
                         vesselClass,

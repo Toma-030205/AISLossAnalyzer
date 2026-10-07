@@ -12,6 +12,9 @@ import ais.map.SencReader;
 import ais.storage.AnalysisResultStore;
 import ais.storage.JdbcAnalysisProfileRepository;
 import ais.storage.JdbcReceiverProfileRepository;
+import ais.storage.JdbcCommunicationModelRepository;
+import ais.storage.JdbcObservedValidationRepository;
+import ais.storage.JdbcSimulationExperimentRepository;
 import ais.storage.SchemaMigrator;
 import ais.storage.SqliteDatabase;
 import ais.input.live.UdpSourceConfig;
@@ -38,6 +41,9 @@ public final class ApplicationContext implements AutoCloseable {
     private final HistoricalAnalysisService historicalAnalysisService;
     private final LiveAnalysisService liveAnalysisService;
     private final AggregateQueryService aggregateQueryService;
+    private final CommunicationModelService communicationModelService;
+    private final SimulationPlaybackService simulationPlaybackService;
+    private final SimulationValidationService simulationValidationService;
     private final ExportService exportService;
 
     private ApplicationContext(
@@ -49,6 +55,9 @@ public final class ApplicationContext implements AutoCloseable {
             HistoricalAnalysisService historicalAnalysisService,
             LiveAnalysisService liveAnalysisService,
             AggregateQueryService aggregateQueryService,
+            CommunicationModelService communicationModelService,
+            SimulationPlaybackService simulationPlaybackService,
+            SimulationValidationService simulationValidationService,
             ExportService exportService) {
         this.mapDataset = mapDataset;
         this.historicalFilesByDate = Map.copyOf(historicalFilesByDate);
@@ -59,6 +68,9 @@ public final class ApplicationContext implements AutoCloseable {
         this.historicalAnalysisService = historicalAnalysisService;
         this.liveAnalysisService = liveAnalysisService;
         this.aggregateQueryService = aggregateQueryService;
+        this.communicationModelService = communicationModelService;
+        this.simulationPlaybackService = simulationPlaybackService;
+        this.simulationValidationService = simulationValidationService;
         this.exportService = exportService;
     }
 
@@ -116,12 +128,34 @@ public final class ApplicationContext implements AutoCloseable {
                 receiver, profile, UdpSourceConfig.defaults(), resultStore);
         AggregateQueryService aggregateService =
                 new AggregateQueryService(database);
+        CommunicationModelService communicationModelService =
+                new CommunicationModelService(database);
+        SimulationPlaybackService simulationPlaybackService =
+                new SimulationPlaybackService(
+                        date -> receivers.findEffectiveOn(date).orElseThrow(
+                                () -> new IllegalStateException(
+                                        date + "に有効な受信局プロファイルがありません")),
+                        profile,
+                        new HistoricalReplayLoader(JAPAN),
+                        new JdbcCommunicationModelRepository(database));
+        SimulationValidationService simulationValidationService =
+                new SimulationValidationService(
+                        date -> receivers.findEffectiveOn(date).orElseThrow(
+                                () -> new IllegalStateException(
+                                        date + "に有効な受信局プロファイルがありません")),
+                        profile, filesByDate,
+                        new HistoricalReplayLoader(JAPAN),
+                        new JdbcCommunicationModelRepository(database),
+                        new JdbcObservedValidationRepository(database),
+                        new JdbcSimulationExperimentRepository(database));
         ExportService exportService = new ExportService();
         return new ApplicationContext(
                 mapDataset, filesByDate,
                 catalog.unclassifiedFiles().size(),
                 receiver, profile, service, liveService,
-                aggregateService, exportService);
+                aggregateService, communicationModelService,
+                simulationPlaybackService, simulationValidationService,
+                exportService);
     }
 
     public MapDataset mapDataset() {
@@ -156,6 +190,18 @@ public final class ApplicationContext implements AutoCloseable {
         return aggregateQueryService;
     }
 
+    public CommunicationModelService communicationModelService() {
+        return communicationModelService;
+    }
+
+    public SimulationPlaybackService simulationPlaybackService() {
+        return simulationPlaybackService;
+    }
+
+    public SimulationValidationService simulationValidationService() {
+        return simulationValidationService;
+    }
+
     public ExportService exportService() {
         return exportService;
     }
@@ -165,6 +211,9 @@ public final class ApplicationContext implements AutoCloseable {
         liveAnalysisService.close();
         historicalAnalysisService.close();
         aggregateQueryService.close();
+        simulationPlaybackService.close();
+        simulationValidationService.close();
+        communicationModelService.close();
         exportService.close();
     }
 

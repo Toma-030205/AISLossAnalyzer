@@ -1,17 +1,33 @@
 package ais.storage;
 
 import ais.analysis.AnalysisRunSummary;
+import ais.domain.AnalysisProfileId;
+import ais.domain.ReceiverProfileId;
+import ais.input.history.InputFingerprint;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
 public final class AnalysisResultStore {
 
     private final TransactionRunner transactions;
+    private final JdbcAnalysisRunRepository runs;
 
     public AnalysisResultStore(SqliteDatabase database) {
-        this.transactions = new TransactionRunner(
-                Objects.requireNonNull(database, "database"));
+        SqliteDatabase checked = Objects.requireNonNull(
+                database, "database");
+        this.transactions = new TransactionRunner(checked);
+        this.runs = new JdbcAnalysisRunRepository(checked);
+    }
+
+    public boolean hasCompletedEquivalentRun(
+            LocalDate targetDate,
+            InputFingerprint input,
+            ReceiverProfileId receiver,
+            AnalysisProfileId profile) {
+        return runs.findEquivalent(targetDate, input, receiver, profile)
+                .isPresent();
     }
 
     public void replaceCompletedRun(
@@ -51,6 +67,10 @@ public final class AnalysisResultStore {
             boolean complete) {
         Objects.requireNonNull(run, "run");
         Objects.requireNonNull(summary, "summary");
+        if (run.sourceMode() == ais.domain.SourceMode.SIMULATION) {
+            throw new IllegalArgumentException(
+                    "simulation results must use simulation storage");
+        }
         if (run.sourceMode() != ais.domain.SourceMode.LIVE) {
             throw new IllegalArgumentException("a live run is required");
         }
@@ -86,6 +106,10 @@ public final class AnalysisResultStore {
             List<VesselMetadataObservation> metadataObservations) {
         Objects.requireNonNull(run, "run");
         Objects.requireNonNull(summary, "summary");
+        if (run.sourceMode() == ais.domain.SourceMode.SIMULATION) {
+            throw new IllegalArgumentException(
+                    "simulation results must use simulation storage");
+        }
         List<DiagnosticSummary> diagnosticCopy =
                 List.copyOf(diagnostics);
         List<AnalysisExclusionPeriod> exclusionCopy =

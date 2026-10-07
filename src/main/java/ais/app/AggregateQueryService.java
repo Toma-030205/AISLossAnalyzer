@@ -1,38 +1,42 @@
 package ais.app;
 
-import ais.aggregate.AggregateKey;
-import ais.aggregate.AggregateMetric;
-import ais.aggregate.AggregationSnapshot;
 import ais.aggregate.MetricCalculator;
-import ais.aggregate.MetricCounts;
-import ais.aggregate.PeriodRollupService;
 import ais.aggregate.RollupDimension;
-import ais.aggregate.RollupKey;
-import ais.aggregate.RollupMetric;
 import ais.domain.AnalysisProfile;
 import ais.domain.ReceiverProfile;
 import ais.domain.VesselClass;
-import ais.spatial.DistanceBand;
-import ais.spatial.GridCellId;
-import ais.storage.AggregateQuery;
+import ais.storage.AggregateRollupQuery;
+import ais.storage.DailyDataQualityQuery;
 import ais.storage.JdbcAggregateRepository;
 import ais.storage.JdbcAnalysisProfileRepository;
 import ais.storage.JdbcAnalysisRunRepository;
+import ais.storage.JdbcDailyDataQualityRepository;
 import ais.storage.JdbcReceiverProfileRepository;
+import ais.storage.JdbcShipLengthAnalysisRepository;
+import ais.storage.JdbcShipLengthPerformanceRepository;
+import ais.storage.ShipLengthAnalysisQuery;
+import ais.storage.ShipLengthPerformanceQuery;
 import ais.storage.SqliteDatabase;
+import ais.storage.StoredDailyDataQuality;
+import ais.storage.StoredDistanceHourRollup;
+import ais.storage.StoredDistanceRollup;
+import ais.storage.StoredHourRollup;
 import ais.storage.StoredAnalysisRun;
+import ais.storage.StoredShipLengthAnalysis;
+import ais.storage.StoredShipLengthCell;
+import ais.storage.StoredShipLengthPerformance;
+import ais.spatial.DistanceBand;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,11 +44,16 @@ import java.util.concurrent.Executors;
 public final class AggregateQueryService implements AutoCloseable {
 
     private static final ZoneId JAPAN = ZoneId.of("Asia/Tokyo");
+    private static final long MINIMUM_LENGTH_VESSEL_DAYS = 30;
+    private static final int MINIMUM_LENGTH_DISTINCT_VESSELS = 3;
 
     private final JdbcAnalysisRunRepository runs;
     private final JdbcAggregateRepository aggregates;
     private final JdbcReceiverProfileRepository receivers;
     private final JdbcAnalysisProfileRepository profiles;
+    private final JdbcDailyDataQualityRepository dataQuality;
+    private final JdbcShipLengthAnalysisRepository shipLengths;
+    private final JdbcShipLengthPerformanceRepository shipLengthPerformance;
     private final ExecutorService executor;
 
     public AggregateQueryService(SqliteDatabase database) {
@@ -53,6 +62,10 @@ public final class AggregateQueryService implements AutoCloseable {
         aggregates = new JdbcAggregateRepository(database);
         receivers = new JdbcReceiverProfileRepository(database);
         profiles = new JdbcAnalysisProfileRepository(database);
+        dataQuality = new JdbcDailyDataQualityRepository(database);
+        shipLengths = new JdbcShipLengthAnalysisRepository(database);
+        shipLengthPerformance =
+                new JdbcShipLengthPerformanceRepository(database);
         executor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "ais-aggregate-query");
             thread.setDaemon(true);
@@ -63,6 +76,28 @@ public final class AggregateQueryService implements AutoCloseable {
     public CompletableFuture<AggregateResult> query(AggregateRequest request) {
         Objects.requireNonNull(request, "request");
         return CompletableFuture.supplyAsync(() -> queryNow(request), executor);
+    }
+
+    public CompletableFuture<DailyDataQualityResult> queryQuality(
+            DailyDataQualityRequest request) {
+        Objects.requireNonNull(request, "request");
+        return CompletableFuture.supplyAsync(
+                () -> queryQualityNow(request), executor);
+    }
+
+    public CompletableFuture<ShipLengthAnalysisResult> queryShipLength(
+            ShipLengthAnalysisRequest request) {
+        Objects.requireNonNull(request, "request");
+        return CompletableFuture.supplyAsync(
+                () -> queryShipLengthNow(request), executor);
+    }
+
+    public CompletableFuture<ShipLengthPerformanceResult>
+            queryShipLengthPerformance(
+                    ShipLengthPerformanceRequest request) {
+        Objects.requireNonNull(request, "request");
+        return CompletableFuture.supplyAsync(
+                () -> queryShipLengthPerformanceNow(request), executor);
     }
 
     public List<ReceiverProfile> receiverProfiles() {
@@ -88,70 +123,377 @@ public final class AggregateQueryService implements AutoCloseable {
         List<StoredAnalysisRun> matching = runs.findCompleted(
                 from, to, request.receiverProfileId(),
                 request.analysisProfileId());
-        AggregationSnapshot combined = AggregationSnapshot.empty();
-        for (StoredAnalysisRun stored : matching) {
-            AggregationSnapshot snapshot = aggregates.query(
-                    new AggregateQuery(stored.run().id(), from, to,
-                            request.vesselClasses()));
-            combined = merge(combined, snapshot);
+        AggregateRollupQuery rollupQuery = new AggregateRollupQuery(
+                from, to, request.dimension(), request.vesselClasses(),
+                request.receiverProfileId(), request.analysisProfileId(),
+                request.excludedDates());
+        List<AggregateRow> rows;
+        if (matching.isEmpty()) {
+            rows = List.of();
+        } else {
+            rows = switch (request.axis()) {
+                case DISTANCE_BAND -> distanceRows(
+                        aggregates.queryDistanceRollups(rollupQuery),
+                        request, profile);
+                case HOUR_OF_DAY -> hourRows(
+                        aggregates.queryHourRollups(rollupQuery), profile);
+                case DISTANCE_BY_HOUR -> distanceHourRows(
+                        aggregates.queryDistanceHourRollups(rollupQuery),
+                        profile);
+            };
         }
-        List<AggregateRow> rows = request.axis()
-                == AggregateAxis.DISTANCE_BAND
-                ? distanceRows(combined, request, profile)
-                : hourRows(combined, request, profile);
+        int includedRunCount = (int) matching.stream()
+                .filter(stored -> stored.run().targetDate() == null
+                        || !request.excludedDates().contains(
+                        stored.run().targetDate()))
+                .count();
         return new AggregateResult(request, receiver, profile,
-                matching.size(), rows);
+                includedRunCount, rows);
+    }
+
+    DailyDataQualityResult queryQualityNow(
+            DailyDataQualityRequest request) {
+        ReceiverProfile receiver = receivers.findById(
+                        request.receiverProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "受信局プロファイルが見つかりません"));
+        AnalysisProfile profile = profiles.findById(
+                        request.analysisProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "解析条件が見つかりません"));
+        List<StoredDailyDataQuality> stored = dataQuality.query(
+                new DailyDataQualityQuery(
+                        request.startDate(), request.endDate(),
+                        request.receiverProfileId(),
+                        request.analysisProfileId()));
+        Map<LocalDate, StoredDailyDataQuality> byDate = new HashMap<>();
+        stored.forEach(row -> byDate.put(row.date(), row));
+        List<DailyDataQualityRow> rows = new ArrayList<>();
+        for (LocalDate date = request.startDate();
+                !date.isAfter(request.endDate());
+                date = date.plusDays(1)) {
+            StoredDailyDataQuality value = byDate.get(date);
+            rows.add(value == null ? missingQualityRow(date)
+                    : qualityRow(value));
+        }
+        return new DailyDataQualityResult(
+                request, receiver, profile, rows);
+    }
+
+    ShipLengthAnalysisResult queryShipLengthNow(
+            ShipLengthAnalysisRequest request) {
+        ReceiverProfile receiver = receivers.findById(
+                        request.receiverProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "受信局プロファイルが見つかりません"));
+        AnalysisProfile profile = profiles.findById(
+                        request.analysisProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "解析条件が見つかりません"));
+        StoredShipLengthAnalysis stored = shipLengths.query(
+                new ShipLengthAnalysisQuery(
+                        request.startDate(), request.endDate(),
+                        request.vesselClasses(),
+                        request.receiverProfileId(),
+                        request.analysisProfileId(),
+                        request.excludedDates()));
+        List<ShipLengthDistanceCell> cells = shipLengthCells(
+                stored.cells(), profile);
+        List<ShipLengthAnalysisRow> rows = shipLengthRows(
+                stored.cells(), profile);
+        return new ShipLengthAnalysisResult(
+                request, receiver, profile,
+                stored.coverage().analysisRunCount(),
+                stored.coverage().totalDistinctVesselCount(),
+                stored.coverage().knownLengthDistinctVesselCount(),
+                stored.coverage().totalVesselDayCount(),
+                stored.coverage().knownLengthVesselDayCount(),
+                rows, cells);
+    }
+
+    ShipLengthPerformanceResult queryShipLengthPerformanceNow(
+            ShipLengthPerformanceRequest request) {
+        ReceiverProfile receiver = receivers.findById(
+                        request.receiverProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "受信局プロファイルが見つかりません"));
+        AnalysisProfile profile = profiles.findById(
+                        request.analysisProfileId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "解析条件が見つかりません"));
+        StoredShipLengthPerformance stored = shipLengthPerformance.query(
+                new ShipLengthPerformanceQuery(
+                        request.startDate(), request.endDate(),
+                        request.vesselClasses(),
+                        request.receiverProfileId(),
+                        request.analysisProfileId(),
+                        request.excludedDates()));
+        MetricCalculator calculator = new MetricCalculator(profile);
+        List<ShipLengthPerformanceRow> rows = stored.rows().stream()
+                .map(row -> new ShipLengthPerformanceRow(
+                        ShipLengthBand.fromOrder(
+                                row.shipLengthBandOrder()),
+                        row.distanceBand(),
+                        row.vesselClass(),
+                        calculator.evaluate(row.counts(),
+                                row.distinctVesselCount()),
+                        row.observationDayCount()))
+                .toList();
+        return new ShipLengthPerformanceResult(
+                request, receiver, profile,
+                stored.readyAnalysisRunCount(),
+                stored.reanalysisRequiredRunCount(),
+                stored.totalDistinctVesselCount(),
+                stored.knownLengthDistinctVesselCount(),
+                rows);
+    }
+
+    private static List<ShipLengthDistanceCell> shipLengthCells(
+            List<StoredShipLengthCell> stored,
+            AnalysisProfile profile) {
+        return stored.stream()
+                .map(cell -> {
+                    ShipLengthBand lengthBand = ShipLengthBand.fromOrder(
+                            cell.shipLengthBandOrder());
+                    boolean sufficient = sufficientLengthSample(cell);
+                    return new ShipLengthDistanceCell(
+                            lengthBand,
+                            cell.vesselClass(),
+                            distanceBand(
+                                    cell.dailyMaximumDistanceBandIndex(),
+                                    profile),
+                            cell.vesselDayCount(),
+                            cell.cellDistinctVesselCount(),
+                            cell.vesselDayCount() * 100.0
+                                    / cell.bandVesselDayCount(),
+                            sufficient);
+                })
+                .toList();
+    }
+
+    private static List<ShipLengthAnalysisRow> shipLengthRows(
+            List<StoredShipLengthCell> stored,
+            AnalysisProfile profile) {
+        Map<ShipLengthGroupKey, List<StoredShipLengthCell>> groups =
+                new LinkedHashMap<>();
+        stored.stream()
+                .sorted(Comparator
+                        .comparingInt(
+                                StoredShipLengthCell::shipLengthBandOrder)
+                        .thenComparing(StoredShipLengthCell::vesselClass)
+                        .thenComparingInt(StoredShipLengthCell::
+                                dailyMaximumDistanceBandIndex))
+                .forEach(cell -> groups.computeIfAbsent(
+                        new ShipLengthGroupKey(
+                                cell.shipLengthBandOrder(),
+                                cell.vesselClass()),
+                        ignored -> new ArrayList<>()).add(cell));
+        List<ShipLengthAnalysisRow> rows = new ArrayList<>();
+        for (Map.Entry<ShipLengthGroupKey,
+                List<StoredShipLengthCell>> entry : groups.entrySet()) {
+            List<StoredShipLengthCell> cells = entry.getValue();
+            StoredShipLengthCell first = cells.getFirst();
+            long vesselDays = first.bandVesselDayCount();
+            int distinctVessels = first.bandDistinctVesselCount();
+            double weightedLowerKilometers = cells.stream()
+                    .mapToDouble(cell ->
+                            cell.dailyMaximumDistanceBandIndex()
+                                    * profile.distanceBinKilometers()
+                                    * (double) cell.vesselDayCount())
+                    .sum();
+            long thirty = cells.stream()
+                    .filter(cell -> lowerKilometers(cell, profile) >= 30.0)
+                    .mapToLong(StoredShipLengthCell::vesselDayCount)
+                    .sum();
+            long fifty = cells.stream()
+                    .filter(cell -> lowerKilometers(cell, profile) >= 50.0)
+                    .mapToLong(StoredShipLengthCell::vesselDayCount)
+                    .sum();
+            rows.add(new ShipLengthAnalysisRow(
+                    ShipLengthBand.fromOrder(
+                            entry.getKey().shipLengthBandOrder()),
+                    entry.getKey().vesselClass(),
+                    distinctVessels,
+                    vesselDays,
+                    weightedLowerKilometers / vesselDays,
+                    medianDistanceBand(cells, vesselDays, profile),
+                    thirty,
+                    thirty * 100.0 / vesselDays,
+                    fifty,
+                    fifty * 100.0 / vesselDays,
+                    sufficientLengthSample(first)));
+        }
+        return List.copyOf(rows);
+    }
+
+    private static String medianDistanceBand(
+            List<StoredShipLengthCell> cells,
+            long vesselDays,
+            AnalysisProfile profile) {
+        long target = (vesselDays + 1) / 2;
+        long cumulative = 0;
+        for (StoredShipLengthCell cell : cells) {
+            cumulative += cell.vesselDayCount();
+            if (cumulative >= target) {
+                return distanceBand(
+                        cell.dailyMaximumDistanceBandIndex(), profile)
+                        .label();
+            }
+        }
+        throw new IllegalStateException(
+                "船体長別分析の中央値を計算できません");
+    }
+
+    private static double lowerKilometers(
+            StoredShipLengthCell cell,
+            AnalysisProfile profile) {
+        return cell.dailyMaximumDistanceBandIndex()
+                * (double) profile.distanceBinKilometers();
+    }
+
+    private static DistanceBand distanceBand(
+            int index,
+            AnalysisProfile profile) {
+        double lower = index
+                * (double) profile.distanceBinKilometers();
+        return new DistanceBand(index, lower,
+                lower + profile.distanceBinKilometers());
+    }
+
+    private static boolean sufficientLengthSample(
+            StoredShipLengthCell cell) {
+        return cell.bandVesselDayCount() >= MINIMUM_LENGTH_VESSEL_DAYS
+                && cell.bandDistinctVesselCount()
+                >= MINIMUM_LENGTH_DISTINCT_VESSELS;
+    }
+
+    private record ShipLengthGroupKey(
+            int shipLengthBandOrder,
+            VesselClass vesselClass) {
+    }
+
+    private static DailyDataQualityRow missingQualityRow(LocalDate date) {
+        return new DailyDataQualityRow(
+                date, DailyDataQualityState.NOT_ANALYZED,
+                "", 0, 0, null, null, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                "SQLiteに保存された解析結果がありません");
+    }
+
+    private static DailyDataQualityRow qualityRow(
+            StoredDailyDataQuality value) {
+        int buckets = value.aggregateBucketCount();
+        DailyDataQualityState state;
+        if (value.sourceFailureCount() > 0
+                || value.acceptedIntervalCount() == 0
+                || buckets <= 275
+                || buckets > DailyDataQualityRow.EXPECTED_BUCKETS_PER_DAY) {
+            state = DailyDataQualityState.REVIEW_REQUIRED;
+        } else if (buckets
+                == DailyDataQualityRow.EXPECTED_BUCKETS_PER_DAY) {
+            state = DailyDataQualityState.ALL_BUCKETS_PRESENT;
+        } else {
+            state = DailyDataQualityState.PARTIAL;
+        }
+        long decoded = Math.addExact(
+                Math.addExact(value.acceptedIntervalCount(),
+                        value.metadataUpdateCount()),
+                value.intervalEventCount());
+        return new DailyDataQualityRow(
+                value.date(), state, value.inputName(),
+                value.inputFileCount(), value.inputUncompressedBytes(),
+                value.firstAggregateBucket(), value.lastAggregateBucket(),
+                buckets, value.distinctVesselCount(), decoded,
+                value.acceptedIntervalCount(),
+                value.estimatedMissingCount(), value.duplicateCount(),
+                value.inputAnomalyCount(), value.invalidPositionCount(),
+                value.thirtyMinuteGapCount(), value.distanceJumpCount(),
+                value.outsideDistanceRangeCount(), qualityNote(value));
+    }
+
+    private static String qualityNote(StoredDailyDataQuality value) {
+        List<String> notes = new ArrayList<>();
+        int missingBuckets = DailyDataQualityRow.EXPECTED_BUCKETS_PER_DAY
+                - value.aggregateBucketCount();
+        if (missingBuckets > 0) {
+            notes.add("解析5分枠が" + missingBuckets + "枠不足");
+        } else if (missingBuckets < 0) {
+            notes.add("解析5分枠が期待値を"
+                    + (-missingBuckets) + "枠超過");
+        }
+        if (value.acceptedIntervalCount() == 0) {
+            notes.add("採用区間なし");
+        }
+        if (value.sourceFailureCount() > 0) {
+            notes.add("入力読込/処理遅延診断 "
+                    + value.sourceFailureCount() + "件");
+        }
+        if (value.inputAnomalyCount() > 0) {
+            notes.add("入力形式・復号診断 "
+                    + value.inputAnomalyCount() + "件");
+        }
+        if (value.invalidPositionCount() > 0) {
+            notes.add("位置利用不可 "
+                    + value.invalidPositionCount() + "件");
+        }
+        return notes.isEmpty() ? "記録上の注意事項なし"
+                : String.join(" / ", notes);
     }
 
     private static List<AggregateRow> distanceRows(
-            AggregationSnapshot snapshot,
+            List<StoredDistanceRollup> rollups,
             AggregateRequest request,
             AnalysisProfile profile) {
-        Map<RollupKey<DistanceBand>, RollupMetric> rollups =
-                new PeriodRollupService(JAPAN).rollup(
-                        snapshot.distanceMetrics(), request.dimension());
         MetricCalculator calculator = new MetricCalculator(profile);
-        return rollups.entrySet().stream()
-                .map(entry -> new AggregateRow(
-                        periodLabel(entry.getKey().periodValue(),
+        return rollups.stream()
+                .map(rollup -> new AggregateRow(
+                        periodLabel(rollup.periodValue(),
                                 request.dimension()),
-                        entry.getKey().spatialKey().label(),
-                        entry.getKey().vesselClass(),
-                        calculator.evaluate(entry.getValue().metric()),
-                        entry.getValue().observationDayCount(),
-                        entry.getKey().spatialKey().index()))
+                        rollup.distanceBand().label(),
+                        rollup.vesselClass(),
+                        calculator.evaluate(rollup.counts(),
+                                rollup.distinctVesselCount()),
+                        rollup.observationDayCount(),
+                        rollup.distanceBand().index()))
                 .sorted(rowComparator(request.dimension()))
                 .toList();
     }
 
     private static List<AggregateRow> hourRows(
-            AggregationSnapshot snapshot,
-            AggregateRequest request,
+            List<StoredHourRollup> rollups,
             AnalysisProfile profile) {
-        Map<AggregateKey<String>, MutableMetric> byBucket = new HashMap<>();
-        snapshot.distanceMetrics().forEach((key, value) -> {
-            AggregateKey<String> target = new AggregateKey<>(
-                    key.bucketStart(), "全距離帯", key.vesselClass());
-            byBucket.computeIfAbsent(target, ignored -> new MutableMetric())
-                    .add(value);
-        });
-        Map<AggregateKey<String>, AggregateMetric> metrics =
-                new LinkedHashMap<>();
-        byBucket.forEach((key, value) -> metrics.put(key, value.toMetric()));
-        Map<RollupKey<String>, RollupMetric> rollups =
-                new PeriodRollupService(JAPAN).rollup(
-                        metrics, RollupDimension.HOUR_OF_DAY);
         MetricCalculator calculator = new MetricCalculator(profile);
-        return rollups.entrySet().stream()
-                .map(entry -> new AggregateRow(
-                        classLabel(entry.getKey().vesselClass()),
-                        String.format("%02d時", Integer.parseInt(
-                                entry.getKey().periodValue())),
-                        entry.getKey().vesselClass(),
-                        calculator.evaluate(entry.getValue().metric()),
-                        entry.getValue().observationDayCount(),
-                        Integer.parseInt(entry.getKey().periodValue())))
+        return rollups.stream()
+                .map(rollup -> new AggregateRow(
+                        classLabel(rollup.vesselClass()),
+                        String.format("%02d時", rollup.hour()),
+                        rollup.vesselClass(),
+                        calculator.evaluate(rollup.counts(),
+                                rollup.distinctVesselCount()),
+                        rollup.observationDayCount(),
+                        rollup.hour()))
                 .sorted(Comparator.comparingInt(AggregateRow::categoryOrder)
+                        .thenComparing(row -> row.vesselClass().name()))
+                .toList();
+    }
+
+    private static List<AggregateRow> distanceHourRows(
+            List<StoredDistanceHourRollup> rollups,
+            AnalysisProfile profile) {
+        MetricCalculator calculator = new MetricCalculator(profile);
+        return rollups.stream()
+                .map(rollup -> new AggregateRow(
+                        classLabel(rollup.vesselClass()),
+                        rollup.distanceBand().label(),
+                        rollup.vesselClass(),
+                        calculator.evaluate(rollup.counts(),
+                                rollup.distinctVesselCount()),
+                        rollup.observationDayCount(),
+                        rollup.distanceBand().index(),
+                        rollup.hour()))
+                .sorted(Comparator
+                        .comparingInt((AggregateRow row) -> row.hourOfDay())
+                        .thenComparingInt(AggregateRow::categoryOrder)
                         .thenComparing(row -> row.vesselClass().name()))
                 .toList();
     }
@@ -201,44 +543,6 @@ public final class AggregateQueryService implements AutoCloseable {
 
     private static String classLabel(VesselClass vesselClass) {
         return vesselClass == VesselClass.CLASS_A ? "Class A" : "Class B";
-    }
-
-    static AggregationSnapshot merge(AggregationSnapshot left,
-                                     AggregationSnapshot right) {
-        return new AggregationSnapshot(
-                mergeMetrics(left.gridMetrics(), right.gridMetrics()),
-                mergeMetrics(left.distanceMetrics(), right.distanceMetrics()),
-                Math.addExact(left.outsideDistanceRangeCount(),
-                        right.outsideDistanceRangeCount()));
-    }
-
-    private static <S> Map<AggregateKey<S>, AggregateMetric> mergeMetrics(
-            Map<AggregateKey<S>, AggregateMetric> left,
-            Map<AggregateKey<S>, AggregateMetric> right) {
-        Map<AggregateKey<S>, MutableMetric> result = new HashMap<>();
-        left.forEach((key, value) -> result
-                .computeIfAbsent(key, ignored -> new MutableMetric())
-                .add(value));
-        right.forEach((key, value) -> result
-                .computeIfAbsent(key, ignored -> new MutableMetric())
-                .add(value));
-        Map<AggregateKey<S>, AggregateMetric> immutable = new HashMap<>();
-        result.forEach((key, value) -> immutable.put(key, value.toMetric()));
-        return Map.copyOf(immutable);
-    }
-
-    private static final class MutableMetric {
-        private MetricCounts counts = MetricCounts.ZERO;
-        private final Set<Integer> vessels = new HashSet<>();
-
-        private void add(AggregateMetric metric) {
-            counts = counts.plus(metric.counts());
-            vessels.addAll(metric.vesselMmsis());
-        }
-
-        private AggregateMetric toMetric() {
-            return new AggregateMetric(counts, vessels);
-        }
     }
 
     @Override
